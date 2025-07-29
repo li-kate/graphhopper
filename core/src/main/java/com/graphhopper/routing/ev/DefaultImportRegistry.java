@@ -22,6 +22,11 @@ import com.graphhopper.routing.util.*;
 import com.graphhopper.routing.util.parsers.*;
 import com.graphhopper.util.PMap;
 
+// CUSTOM IMPORTS
+import com.graphhopper.saferoutes.ev.*;
+import com.graphhopper.saferoutes.parsers.*;
+// CUSTOM IMPORTS END
+
 public class DefaultImportRegistry implements ImportRegistry {
     @Override
     public ImportUnit createImportUnit(String name) {
@@ -30,6 +35,23 @@ public class DefaultImportRegistry implements ImportRegistry {
                     (lookup, props) -> new OSMRoundaboutParser(
                             lookup.getBooleanEncodedValue(Roundabout.KEY))
             );
+        // CUSTOM ENCODED VALUES ADDED HERE
+        else if (UTCI.KEY.equals(name))
+            return ImportUnit.create(name, props -> UTCI.create(),
+                    (lookup, props) -> new UTCIParser(
+                            lookup.getDecimalEncodedValue(UTCI.KEY))
+            );
+        else if (NDVI.KEY.equals(name))
+            return ImportUnit.create(name, props -> NDVI.create(),
+                    (lookup, props) -> new NDVIParser(
+                            lookup.getDecimalEncodedValue(NDVI.KEY))
+            );
+        else if (EVI.KEY.equals(name))
+            return ImportUnit.create(name, props -> EVI.create(),
+                    (lookup, props) -> new EVIParser(
+                            lookup.getDecimalEncodedValue(EVI.KEY))
+            );
+        // CUSTOM ENCODED VALUES END
         else if (GetOffBike.KEY.equals(name))
             return ImportUnit.create(name, props -> GetOffBike.create(),
                     (lookup, pros) -> new OSMGetOffBikeParser(
