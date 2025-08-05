@@ -12,15 +12,17 @@ public class UTCIParser implements TagParser {
 
     private static final Logger logger = LoggerFactory.getLogger(UTCIParser.class);
 
-    private final DecimalEncodedValue utciEnc;
+    private final DecimalEncodedValue utciRawEnc;         // utci
+    private final DecimalEncodedValue utciNormalizedEnc;  // utci_normalized
     private static final double DEFAULT_UTCI = 25.0; // Moderate condition
 
     // Min and max used for normalization
     private static final double UTCI_MIN = 0.0;
     private static final double UTCI_MAX = 45.0;
 
-    public UTCIParser(DecimalEncodedValue utciEnc) {
-        this.utciEnc = utciEnc;
+    public UTCIParser(DecimalEncodedValue utciRawEnc, DecimalEncodedValue utciNormalizedEnc) {
+        this.utciRawEnc = utciRawEnc;
+        this.utciNormalizedEnc = utciNormalizedEnc;
     }
 
     @Override
@@ -39,7 +41,10 @@ public class UTCIParser implements TagParser {
         // Normalize to 0–1 range
         double normalized = Math.max(0, Math.min(1, (rawUTCI - UTCI_MIN) / (UTCI_MAX - UTCI_MIN)));
 
+//        logger.info("Edge ID {} UTCI tag: {}, raw: {}, normalized: {}", edgeId, utciTag, rawUTCI, normalized);
+
         // Store into edge
-        utciEnc.setDecimal(false, edgeId, edgeIntAccess, normalized);
+        utciRawEnc.setDecimal(false, edgeId, edgeIntAccess, rawUTCI);           // renamed key: "utci"
+        utciNormalizedEnc.setDecimal(false, edgeId, edgeIntAccess, normalized); // renamed key: "utci_normalized"
     }
 }

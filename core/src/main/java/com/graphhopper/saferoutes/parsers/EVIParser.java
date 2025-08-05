@@ -12,11 +12,13 @@ public class EVIParser implements TagParser {
 
     private static final Logger logger = LoggerFactory.getLogger(EVIParser.class);
 
-    private final DecimalEncodedValue eviEnc;
-    private static final double DEFAULT_EVI = 0.0;
+    private final DecimalEncodedValue eviRawEnc;         // evi
+    private final DecimalEncodedValue eviNormalizedEnc;  // evi_normalized
+    private static final double DEFAULT_EVI = 0.0; // Moderate condition
 
-    public EVIParser(DecimalEncodedValue eviEnc) {
-        this.eviEnc = eviEnc;
+    public EVIParser(DecimalEncodedValue eviRawEnc, DecimalEncodedValue eviNormalizedEnc) {
+        this.eviRawEnc = eviRawEnc;
+        this.eviNormalizedEnc = eviNormalizedEnc;
     }
 
     @Override
@@ -35,6 +37,10 @@ public class EVIParser implements TagParser {
         // Normalize from [-1, 1] to [0, 1]
         double normalized = Math.max(0, Math.min(1, (rawEVI + 1) / 2));
 
-        eviEnc.setDecimal(false, edgeId, edgeIntAccess, normalized);
+//        logger.info("Edge ID {} EVI tag: {}, raw: {}, normalized: {}", edgeId, eviTag, rawEVI, normalized);
+
+        // Store into edge
+        eviRawEnc.setDecimal(false, edgeId, edgeIntAccess, rawEVI);           // renamed key: "evi"
+        eviNormalizedEnc.setDecimal(false, edgeId, edgeIntAccess, normalized); // renamed key: "evi_normalized"
     }
 }

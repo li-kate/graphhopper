@@ -36,21 +36,54 @@ public class DefaultImportRegistry implements ImportRegistry {
                             lookup.getBooleanEncodedValue(Roundabout.KEY))
             );
         // CUSTOM ENCODED VALUES ADDED HERE
-        else if (UTCI.KEY.equals(name))
-            return ImportUnit.create(name, props -> UTCI.create(),
+        else if (UTCI.KEY.equals(name)) {
+            return ImportUnit.create(
+                    name,
+                    props -> UTCI.createRaw(),
                     (lookup, props) -> new UTCIParser(
-                            lookup.getDecimalEncodedValue(UTCI.KEY))
+                            lookup.getDecimalEncodedValue(UTCI.KEY),
+                            lookup.getDecimalEncodedValue(UTCI.NORMALIZED_KEY)
+                    )
             );
-        else if (NDVI.KEY.equals(name))
-            return ImportUnit.create(name, props -> NDVI.create(),
+        } else if (UTCI.NORMALIZED_KEY.equals(name)) {
+            return ImportUnit.create(
+                    name,
+                    props -> UTCI.createNormalized(),
+                    (lookup, props) -> new NoOpParser() // ← required to avoid crash
+            );
+        }
+        else if (NDVI.KEY.equals(name)) {
+            return ImportUnit.create(
+                    name,
+                    props -> NDVI.createRaw(),
                     (lookup, props) -> new NDVIParser(
-                            lookup.getDecimalEncodedValue(NDVI.KEY))
+                            lookup.getDecimalEncodedValue(NDVI.KEY),
+                            lookup.getDecimalEncodedValue(NDVI.NORMALIZED_KEY)
+                    )
             );
-        else if (EVI.KEY.equals(name))
-            return ImportUnit.create(name, props -> EVI.create(),
+        } else if (NDVI.NORMALIZED_KEY.equals(name)) {
+            return ImportUnit.create(
+                    name,
+                    props -> NDVI.createNormalized(),
+                    (lookup, props) -> new NoOpParser() // ← required to avoid crash
+            );
+        }
+        else if (EVI.KEY.equals(name)) {
+            return ImportUnit.create(
+                    name,
+                    props -> EVI.createRaw(),
                     (lookup, props) -> new EVIParser(
-                            lookup.getDecimalEncodedValue(EVI.KEY))
+                            lookup.getDecimalEncodedValue(EVI.KEY),
+                            lookup.getDecimalEncodedValue(EVI.NORMALIZED_KEY)
+                    )
             );
+        } else if (EVI.NORMALIZED_KEY.equals(name)) {
+            return ImportUnit.create(
+                    name,
+                    props -> EVI.createNormalized(),
+                    (lookup, props) -> new NoOpParser() // ← required to avoid crash
+            );
+        }
         // CUSTOM ENCODED VALUES END
         else if (GetOffBike.KEY.equals(name))
             return ImportUnit.create(name, props -> GetOffBike.create(),

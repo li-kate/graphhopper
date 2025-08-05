@@ -12,11 +12,13 @@ public class NDVIParser implements TagParser {
 
     private static final Logger logger = LoggerFactory.getLogger(NDVIParser.class);
 
-    private final DecimalEncodedValue ndviEnc;
+    private final DecimalEncodedValue ndviRawEnc;         // evi
+    private final DecimalEncodedValue ndviNormalizedEnc;  // evi_normalized
     private static final double DEFAULT_NDVI = 0.0;
 
-    public NDVIParser(DecimalEncodedValue ndviEnc) {
-        this.ndviEnc = ndviEnc;
+    public NDVIParser(DecimalEncodedValue ndviRawEnc, DecimalEncodedValue ndviNormalizedEnc) {
+        this.ndviRawEnc = ndviRawEnc;
+        this.ndviNormalizedEnc = ndviNormalizedEnc;
     }
 
     @Override
@@ -35,6 +37,10 @@ public class NDVIParser implements TagParser {
         // Normalize from [-1, 1] to [0, 1]
         double normalized = Math.max(0, Math.min(1, (rawNDVI + 1) / 2));
 
-        ndviEnc.setDecimal(false, edgeId, edgeIntAccess, normalized);
+        // logger.info("Edge ID {} NDVI tag: {}, raw: {}, normalized: {}", edgeId, ndviTag, rawNDVI, normalized);
+
+        // Store into edge
+        ndviRawEnc.setDecimal(false, edgeId, edgeIntAccess, rawNDVI);           // renamed key: "ndvi"
+        ndviNormalizedEnc.setDecimal(false, edgeId, edgeIntAccess, normalized); // renamed key: "ndvi_normalized"
     }
 }

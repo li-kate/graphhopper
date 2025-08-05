@@ -4,9 +4,16 @@ import com.graphhopper.routing.ev.DecimalEncodedValue;
 import com.graphhopper.routing.ev.DecimalEncodedValueImpl;
 
 public class NDVI {
-    public static final String KEY = "ndvi";
+    public static final String KEY = "ndvi"; // raw
+    public static final String NORMALIZED_KEY = "ndvi_normalized";
 
-    public static DecimalEncodedValue create() {
-        return new DecimalEncodedValueImpl(KEY, 8, 1, false);
+    public static DecimalEncodedValue createRaw() {
+        return new DecimalEncodedValueImpl(KEY, 14, 0, 0.0001,
+                false, false, false);
+    }
+
+    public static DecimalEncodedValue createNormalized() {
+        return new DecimalEncodedValueImpl(NORMALIZED_KEY, 14, 0, 0.0001,
+                false, false, false);
     }
 }
