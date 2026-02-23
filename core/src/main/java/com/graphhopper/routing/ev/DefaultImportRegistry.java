@@ -84,6 +84,70 @@ public class DefaultImportRegistry implements ImportRegistry {
                     (lookup, props) -> new NoOpParser() // ← required to avoid crash
             );
         }
+        else if (UTCI_MP.KEY.equals(name)) {
+            return ImportUnit.create(
+                    name,
+                    props -> UTCI_MP.createRaw(),
+                    (lookup, props) -> new UTCI_MP_Parser(
+                            lookup.getDecimalEncodedValue(UTCI_MP.KEY),
+                            lookup.getDecimalEncodedValue(UTCI_MP.NORMALIZED_KEY)
+                    )
+            );
+        } else if (UTCI_MP.NORMALIZED_KEY.equals(name)) {
+            return ImportUnit.create(
+                    name,
+                    props -> UTCI_MP.createNormalized(),
+                    (lookup, props) -> new NoOpParser() // ← required to avoid crash
+            );
+        }
+        else if (UTCI_AP.KEY.equals(name)) {
+            return ImportUnit.create(
+                    name,
+                    props -> UTCI_AP.createRaw(),
+                    (lookup, props) -> new UTCI_AP_Parser(
+                            lookup.getDecimalEncodedValue(UTCI_AP.KEY),
+                            lookup.getDecimalEncodedValue(UTCI_AP.NORMALIZED_KEY)
+                    )
+            );
+        } else if (UTCI_AP.NORMALIZED_KEY.equals(name)) {
+            return ImportUnit.create(
+                    name,
+                    props -> UTCI_AP.createNormalized(),
+                    (lookup, props) -> new NoOpParser() // ← required to avoid crash
+            );
+        }
+        else if (UTCI_EP.KEY.equals(name)) {
+            return ImportUnit.create(
+                    name,
+                    props -> UTCI_EP.createRaw(),
+                    (lookup, props) -> new UTCI_EP_Parser(
+                            lookup.getDecimalEncodedValue(UTCI_EP.KEY),
+                            lookup.getDecimalEncodedValue(UTCI_EP.NORMALIZED_KEY)
+                    )
+            );
+        } else if (UTCI_EP.NORMALIZED_KEY.equals(name)) {
+            return ImportUnit.create(
+                    name,
+                    props -> UTCI_EP.createNormalized(),
+                    (lookup, props) -> new NoOpParser() // ← required to avoid crash
+            );
+        }
+        else if (LST_Median.KEY.equals(name)) {
+            return ImportUnit.create(
+                    name,
+                    props -> LST_Median.createRaw(),
+                    (lookup, props) -> new LST_Median_Parser(
+                            lookup.getDecimalEncodedValue(LST_Median.KEY),
+                            lookup.getDecimalEncodedValue(LST_Median.NORMALIZED_KEY)
+                    )
+            );
+        } else if (LST_Median.NORMALIZED_KEY.equals(name)) {
+            return ImportUnit.create(
+                    name,
+                    props -> LST_Median.createNormalized(),
+                    (lookup, props) -> new NoOpParser() // ← required to avoid crash
+            );
+        }
         // CUSTOM ENCODED VALUES END
         else if (GetOffBike.KEY.equals(name))
             return ImportUnit.create(name, props -> GetOffBike.create(),
