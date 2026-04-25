@@ -85,6 +85,12 @@ public class AlternativeRoute extends AStarBidirection implements RoutingAlgorit
      * This is the reason we cannot require a too big plateau portion here as default.
      */
     private final double minPlateauFactor;
+    /**
+     * Maximum allowed distance (in meters) for alternative paths.
+     * Alternatives with distance exceeding this value are rejected.
+     * A value <= 0 disables this filter (default: -1, disabled).
+     */
+    private final double maxDistance;
 
     public AlternativeRoute(Graph graph, Weighting weighting, TraversalMode traversalMode, PMap hints) {
         super(graph, weighting, traversalMode);
@@ -99,6 +105,7 @@ public class AlternativeRoute extends AStarBidirection implements RoutingAlgorit
         this.maxWeightFactor = hints.getDouble(MAX_WEIGHT, 1.25);
         this.maxShareFactor = hints.getDouble(MAX_SHARE, 0.6);
         this.minPlateauFactor = hints.getDouble("alternative_route.min_plateau_factor", 0.1);
+        this.maxDistance = hints.getDouble("alternative_route.max_distance", -1);
     }
 
     static List<String> getAltNames(Graph graph, SPTEntry ee) {
@@ -337,9 +344,13 @@ public class AlternativeRoute extends AStarBidirection implements RoutingAlgorit
                     if (sortBy < worstSortBy || alternatives.size() < maxPaths) {
                         Path path = DefaultBidirPathExtractor.extractPath(graph, weighting, fromSPTEntry, toSPTEntry, weight);
 
-                        // for now do not add alternatives to set, if we do we need to remove then on alternatives.clear too (see below)
-                        // AtomicInteger tid = addToMap(traversalIDMap, path);
-                        // int tid = traversalMode.createTraversalId(path.calcEdges().get(0), false);
+                        // (4) Distance-based filtering: reject if path exceeds max allowed distance
+                        if (maxDistance > 0) {
+                            if (path.getDistance() > maxDistance) {
+                                return true;  // skip this alternative, too long by distance
+                            }
+                        }
+
                         alternatives.add(new AlternativeInfo(sortBy, path, fromEE, toEE, shareWeight, altNames));
 
                         Collections.sort(alternatives, ALT_COMPARATOR);
