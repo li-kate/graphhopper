@@ -29,7 +29,9 @@ import com.graphhopper.util.*;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -91,6 +93,13 @@ public class AlternativeRoute extends AStarBidirection implements RoutingAlgorit
      * A value <= 0 disables this filter (default: -1, disabled).
      */
     private final double maxDistance;
+    /**
+     * Maximum ratio of shared edge distance between any two accepted alternatives.
+     * E.g. if set to 0.7, a candidate sharing more than 70% of its edge distance
+     * with any already-accepted alternative is rejected.
+     * A value <= 0 or >= 1 disables this filter (default: -1, disabled).
+     */
+    private final double maxDistanceShareFactor;
 
     public AlternativeRoute(Graph graph, Weighting weighting, TraversalMode traversalMode, PMap hints) {
         super(graph, weighting, traversalMode);
@@ -106,6 +115,7 @@ public class AlternativeRoute extends AStarBidirection implements RoutingAlgorit
         this.maxShareFactor = hints.getDouble(MAX_SHARE, 0.6);
         this.minPlateauFactor = hints.getDouble("alternative_route.min_plateau_factor", 0.1);
         this.maxDistance = hints.getDouble("alternative_route.max_distance", -1);
+        this.maxDistanceShareFactor = hints.getDouble("alternative_route.max_distance_share_factor", -1);
     }
 
     static List<String> getAltNames(Graph graph, SPTEntry ee) {
@@ -127,6 +137,46 @@ public class AlternativeRoute extends AStarBidirection implements RoutingAlgorit
                              double shareInfluence, double shareWeight,
                              double plateauInfluence, double plateauWeight) {
         return weightInfluence * weight + shareInfluence * shareWeight + plateauInfluence * plateauWeight;
+    }
+
+    /**
+     * Build a map of edge ID -> distance (meters) for a path.
+     */
+    private Map<Integer, Double> calcEdgeDistances(Path path) {
+        Map<Integer, Double> edgeDistances = new HashMap<>();
+        for (EdgeIteratorState edge : path.calcEdges()) {
+            edgeDistances.put(edge.getEdge(), edge.getDistance());
+        }
+        return edgeDistances;
+    }
+
+    /**
+     * Check if a candidate path is too similar (by edge distance) to any already-accepted alternative.
+     * Returns true if the candidate should be rejected.
+     */
+    private boolean isTooSimilarByDistance(Path candidate, List<AlternativeInfo> accepted) {
+        Map<Integer, Double> candidateEdges = calcEdgeDistances(candidate);
+        double candidateTotal = candidate.getDistance();
+        if (candidateTotal <= 0) return false;
+
+        for (AlternativeInfo alt : accepted) {
+            Map<Integer, Double> altEdges = calcEdgeDistances(alt.getPath());
+            double altTotal = alt.getPath().getDistance();
+
+            double sharedDistance = 0;
+            for (Map.Entry<Integer, Double> entry : candidateEdges.entrySet()) {
+                Double altDist = altEdges.get(entry.getKey());
+                if (altDist != null) {
+                    sharedDistance += Math.max(entry.getValue(), altDist);
+                }
+            }
+
+            double maxTotal = Math.max(candidateTotal, altTotal);
+            if (maxTotal > 0 && sharedDistance / maxTotal > maxDistanceShareFactor) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public List<AlternativeInfo> calcAlternatives(int from, int to) {
@@ -348,6 +398,14 @@ public class AlternativeRoute extends AStarBidirection implements RoutingAlgorit
                         if (maxDistance > 0) {
                             if (path.getDistance() > maxDistance) {
                                 return true;  // skip this alternative, too long by distance
+                            }
+                        }
+
+                        // (5) Distance-based share filtering: reject if path shares too many edges
+                        // (by distance) with any already-accepted alternative
+                        if (maxDistanceShareFactor > 0 && maxDistanceShareFactor < 1) {
+                            if (isTooSimilarByDistance(path, alternatives)) {
+                                return true;  // skip this alternative, too similar
                             }
                         }
 
