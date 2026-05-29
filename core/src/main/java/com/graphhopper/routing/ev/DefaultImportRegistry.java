@@ -147,6 +147,30 @@ public class DefaultImportRegistry implements ImportRegistry {
                     props -> LST_Median.createNormalized(),
                     (lookup, props) -> new NoOpParser() // ← required to avoid crash
             );
+        } else if (UtciHourly.isUtciHourlyKey(name)) {
+                int hour = UtciHourly.parseHour(name);
+                boolean isNormalized = name.endsWith("_normalized");
+
+                if (isNormalized) {
+                        // Normalized variant — create the EV, parser is NoOp (raw parser writes both)
+                        return ImportUnit.create(
+                                name,
+                                props -> UtciHourly.createNormalized(hour),
+                                (lookup, props) -> new NoOpParser()
+                        );
+                } else {
+                        // Raw variant — create the EV and the parser that writes both raw + normalized
+                        // rawKey() is both the EV name and the OSM tag name (both lowercase)
+                        return ImportUnit.create(
+                                name,
+                                props -> UtciHourly.createRaw(hour),
+                                (lookup, props) -> new UtciHourlyParser(
+                                        UtciHourly.rawKey(hour),
+                                        lookup.getDecimalEncodedValue(UtciHourly.rawKey(hour)),
+                                        lookup.getDecimalEncodedValue(UtciHourly.normalizedKey(hour))
+                                )
+                        );
+                }
         }
         // CUSTOM ENCODED VALUES END
         else if (GetOffBike.KEY.equals(name))
