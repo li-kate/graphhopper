@@ -8,7 +8,8 @@ public class LST_Median {
     public static final String NORMALIZED_KEY = "lst_median_normalized";
 
     public static DecimalEncodedValue createRaw() {
-        return new DecimalEncodedValueImpl(KEY, 16, 4, false);
+        // factor 0.0001 => 4 decimal places; 22 bits covers the ~273..343 Kelvin range (max ~419.4)
+        return new DecimalEncodedValueImpl(KEY, 22, 0, 0.0001, false, false, false);
     }
 
     public static DecimalEncodedValue createNormalized() {

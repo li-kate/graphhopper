@@ -8,7 +8,8 @@ public class UTCI {
     public static final String NORMALIZED_KEY = "utci_normalized";
 
     public static DecimalEncodedValue createRaw() {
-        return new DecimalEncodedValueImpl(KEY, 16, 4, false);
+        // factor 0.0001 => 4 decimal places; 19 bits covers the 0..45 UTCI range (max ~52.4)
+        return new DecimalEncodedValueImpl(KEY, 19, 0, 0.0001, false, false, false);
     }
 
     public static DecimalEncodedValue createNormalized() {
