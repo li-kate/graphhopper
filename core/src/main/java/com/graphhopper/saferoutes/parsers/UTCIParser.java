@@ -18,7 +18,7 @@ public class UTCIParser implements TagParser {
 
     // Min and max used for normalization
     private static final double UTCI_MIN = 0.0;
-    private static final double UTCI_MAX = 45.0;
+    private static final double UTCI_MAX = 50.0;
 
     public UTCIParser(DecimalEncodedValue utciRawEnc, DecimalEncodedValue utciNormalizedEnc) {
         this.utciRawEnc = utciRawEnc;

@@ -23,7 +23,7 @@ public class UtciHourlyParser implements TagParser {
 
     private static final double DEFAULT_UTCI = 25.0;
     private static final double UTCI_MIN = 0.0;
-    private static final double UTCI_MAX = 45.0;
+    private static final double UTCI_MAX = 50.0;
 
     /**
      * @param tagName       The OSM tag / EV key name, e.g. "utci_14"
