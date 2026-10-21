@@ -14,11 +14,6 @@ public class UTCI_EP_Parser implements TagParser {
 
     private final DecimalEncodedValue utciRawEPEnc;         // utci
     private final DecimalEncodedValue utciNormalizedEPEnc;  // utci_normalized
-    private static final double DEFAULT_UTCI = 25.0; // Moderate condition
-
-    // Min and max used for normalization
-    private static final double UTCI_MIN = 0.0;
-    private static final double UTCI_MAX = 50.0;
 
     public UTCI_EP_Parser(DecimalEncodedValue utciRawEPEnc, DecimalEncodedValue utciNormalizedEPEnc) {
         this.utciRawEPEnc = utciRawEPEnc;
@@ -28,18 +23,18 @@ public class UTCI_EP_Parser implements TagParser {
     @Override
     public void handleWayTags(int edgeId, EdgeIntAccess edgeIntAccess, ReaderWay way, IntsRef relationFlags) {
         String utci_EP_Tag = way.getTag("utci_ep");
-        double rawUTCI = DEFAULT_UTCI;
+        double rawUTCI = UtciConstants.DEFAULT_UTCI;
 
         if (utci_EP_Tag != null) {
             try {
                 rawUTCI = Double.parseDouble(utci_EP_Tag);
             } catch (NumberFormatException e) {
-                logger.warn("Invalid UTCI value: {}. Using default {}", utci_EP_Tag, DEFAULT_UTCI);
+                logger.warn("Invalid UTCI value: {}. Using default {}", utci_EP_Tag, UtciConstants.DEFAULT_UTCI);
             }
         }
 
         // Normalize to 0–1 range
-        double normalized = Math.max(0, Math.min(1, (rawUTCI - UTCI_MIN) / (UTCI_MAX - UTCI_MIN)));
+        double normalized = UtciConstants.normalize(rawUTCI);
 
 //        logger.info("Edge ID {} UTCI tag: {}, raw: {}, normalized: {}", edgeId, utciTag, rawUTCI, normalized);
 

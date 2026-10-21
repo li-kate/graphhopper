@@ -21,10 +21,6 @@ public class UtciHourlyParser implements TagParser {
     private final DecimalEncodedValue rawEnc;
     private final DecimalEncodedValue normalizedEnc;
 
-    private static final double DEFAULT_UTCI = 25.0;
-    private static final double UTCI_MIN = 0.0;
-    private static final double UTCI_MAX = 50.0;
-
     /**
      * @param tagName       The OSM tag / EV key name, e.g. "utci_14"
      * @param rawEnc        Encoded value for storing the raw UTCI
@@ -39,17 +35,17 @@ public class UtciHourlyParser implements TagParser {
     @Override
     public void handleWayTags(int edgeId, EdgeIntAccess edgeIntAccess, ReaderWay way, IntsRef relationFlags) {
         String tagValue = way.getTag(tagName);
-        double rawUtci = DEFAULT_UTCI;
+        double rawUtci = UtciConstants.DEFAULT_UTCI;
 
         if (tagValue != null) {
             try {
                 rawUtci = Double.parseDouble(tagValue);
             } catch (NumberFormatException e) {
-                logger.warn("Invalid {} value: {}. Using default {}", tagName, tagValue, DEFAULT_UTCI);
+                logger.warn("Invalid {} value: {}. Using default {}", tagName, tagValue, UtciConstants.DEFAULT_UTCI);
             }
         }
 
-        double normalized = Math.max(0, Math.min(1, (rawUtci - UTCI_MIN) / (UTCI_MAX - UTCI_MIN)));
+        double normalized = UtciConstants.normalize(rawUtci);
 
         rawEnc.setDecimal(false, edgeId, edgeIntAccess, rawUtci);
         normalizedEnc.setDecimal(false, edgeId, edgeIntAccess, normalized);
