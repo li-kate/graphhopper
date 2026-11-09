@@ -24,9 +24,9 @@ import com.graphhopper.application.GraphHopperServerConfiguration;
 import com.graphhopper.application.util.GraphHopperServerTestConfiguration;
 import com.graphhopper.config.CHProfile;
 import com.graphhopper.config.Profile;
+import com.graphhopper.resources.InfoResource;
 import com.graphhopper.routing.TestProfiles;
 import com.graphhopper.util.BodyAndStatus;
-import com.graphhopper.util.GHUtility;
 import com.graphhopper.util.Helper;
 import com.graphhopper.util.TurnCostsConfig;
 import io.dropwizard.testing.junit5.DropwizardAppExtension;
@@ -39,10 +39,9 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
 import java.io.File;
-import java.io.IOException;
-import java.io.InputStreamReader;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 import static com.graphhopper.application.resources.Util.postWithStatus;
 import static com.graphhopper.application.util.TestUtils.clientTarget;
@@ -63,14 +62,17 @@ public class RouteResourceCustomModelTest {
                 putObject("prepare.min_network_size", 200).
                 putObject("datareader.file", "../core/files/north-bayreuth.osm.gz").
                 putObject("graph.location", DIR).
+                putObject("graph.elevation.provider", "srtm").
+                putObject("graph.elevation.clear", true).
+                putObject("graph.elevation.cache_dir", "../core/files/").
                 putObject("custom_areas.directory", "./src/test/resources/com/graphhopper/application/resources/areas").
                 putObject("import.osm.ignored_highways", "").
-                putObject("graph.encoded_values", "car_access, car_average_speed, road_access, " +
-                        "bike_access, bike_priority, bike_average_speed, bike_road_access, " +
+                putObject("graph.encoded_values", "car_access, car_average_speed, road_access, max_speed, " +
+                        "bike_access, bike_priority, bike_average_speed, bike_road_access, bike_network, " +
                         "foot_access, foot_priority, foot_average_speed, foot_road_access, " +
                         "max_height, max_weight, max_width, hazmat, toll, surface, track_type, hgv, " +
                         "average_slope, max_slope, bus_access, road_class, get_off_bike, roundabout, " +
-                        "country, orientation, mtb_rating, hike_rating").
+                        "country, orientation, mtb_rating, hike_rating, road_environment,ferry_speed").
                 setProfiles(List.of(
                         TestProfiles.constantSpeed("roads", 120),
                         new Profile("car").setCustomModel(TestProfiles.accessAndSpeed("unused", "car").
@@ -111,6 +113,17 @@ public class RouteResourceCustomModelTest {
     }
 
     @Test
+    public void testInfoParameters() {
+        InfoResource.Info info = clientTarget(app, "/info").request().get(InfoResource.Info.class);
+        InfoResource.Info.ProfileData cargoBike = info.profiles.stream().filter(p -> p.name.equals("cargo_bike")).findFirst().orElseThrow();
+        assertEquals(Map.of("vehicle_height", Map.of("value", 2.3, "min", 0.0),
+                "vehicle_width", Map.of("value", 1.2, "min", 0.0),
+                "vehicle_max_speed", Map.of("value", 25.0, "min", 5.0, "max", 35.0)), cargoBike.parameters);
+        InfoResource.Info.ProfileData car = info.profiles.stream().filter(p -> p.name.equals("car")).findFirst().orElseThrow();
+        assertNull(car.parameters);
+    }
+
+    @Test
     public void testBlockAreaNotAllowed() {
         String body = "{\"points\": [[11.58199, 50.0141], [11.5865, 50.0095]], \"profile\": \"car\", \"block_area\": \"abc\", \"ch.disable\": true}";
         JsonNode jsonNode = query(body, 400);
@@ -122,7 +135,7 @@ public class RouteResourceCustomModelTest {
         // the bus profile is a custom profile and we can use its CH preparation as long as we do not add a custom model
         String body = "{\"points\": [[11.58199, 50.0141], [11.5865, 50.0095]], \"profile\": \"bus\"}";
         JsonNode path = getPath(body);
-        assertEquals(610, path.get("distance").asDouble(), 10);
+        assertEquals(611, path.get("distance").asDouble(), 10);
         assertEquals(27_000, path.get("time").asLong(), 1_000);
     }
 
@@ -218,7 +231,7 @@ public class RouteResourceCustomModelTest {
     }
 
     @ParameterizedTest
-    @CsvSource(value = {"0.05,3073", "0.5,1498"})
+    @CsvSource(value = {"0.05,3093", "0.5,1498"})
     public void testAvoidArea(double priority, double expectedDistance) {
         String bodyFragment = "\"points\": [[11.58199, 50.0141], [11.5865, 50.0095]], \"profile\": \"car\", \"ch.disable\": true";
         JsonNode path = getPath("{" + bodyFragment + ", \"custom_model\": {}}");
@@ -246,24 +259,26 @@ public class RouteResourceCustomModelTest {
     @Test
     public void testAvoidArea() {
         JsonNode path = getPath("{\"points\": [[11.58199, 50.0141], [11.5865, 50.0095]], \"profile\": \"car_with_area\", \"ch.disable\": true, \"custom_model\": {}}");
-        assertEquals(path.get("distance").asDouble(), 3073, 10);
+        assertEquals(path.get("distance").asDouble(), 3093, 10);
     }
 
     @Test
-    public void testCargoBike() throws IOException {
+    public void testCargoBike() {
         String body = "{\"points\": [[11.58199, 50.0141], [11.5865, 50.0095]], \"profile\": \"bike\", \"custom_model\": {}, \"ch.disable\": true}";
         JsonNode path = getPath(body);
         assertEquals(path.get("distance").asDouble(), 661, 5);
 
-        String json = Helper.readJSONFileWithoutComments(new InputStreamReader(GHUtility.class.getResourceAsStream("/com/graphhopper/custom_models/cargo_bike.json")));
-        body = "{\"points\": [[11.58199, 50.0141], [11.5865, 50.0095]], \"profile\": \"bike\", \"custom_model\":" + json + ", \"ch.disable\": true}";
+        body = "{\"points\": [[11.58199, 50.0141], [11.5865, 50.0095]], \"profile\": \"cargo_bike\", \"custom_model\": {}, \"ch.disable\": true}";
         path = getPath(body);
         assertEquals(path.get("distance").asDouble(), 1007, 5);
 
-        // results should be identical be it via server-side profile or query profile:
-        body = "{\"points\": [[11.58199, 50.0141], [11.5865, 50.0095]], \"profile\": \"cargo_bike\", \"custom_model\": {}, \"ch.disable\": true}";
+        // a request can override a parameter value within its range, but only the value
+        body = "{\"points\": [[11.58199, 50.0141], [11.5865, 50.0095]], \"profile\": \"cargo_bike\", \"custom_model\": {\"parameters\": {\"vehicle_max_speed\": 20}}, \"ch.disable\": true}";
         JsonNode path2 = getPath(body);
         assertEquals(path.get("distance").asDouble(), path2.get("distance").asDouble(), 1);
+        assertTrue(path2.get("time").asLong() > path.get("time").asLong());
+        assertMessageStartsWith(query(body.replace(": 20", ": 50"), 400), "parameter 'vehicle_max_speed': value 50");
+        assertMessageStartsWith(query(body.replace("max_speed", "maxspeed"), 400), "parameter 'vehicle_maxspeed' is not defined");
     }
 
     @Test
@@ -290,7 +305,7 @@ public class RouteResourceCustomModelTest {
                 "}";
         JsonNode path = getPath(jsonQuery);
         double expectedDistance = path.get("distance").asDouble();
-        assertEquals(4819, expectedDistance, 10);
+        assertEquals(4833, expectedDistance, 10);
     }
 
     @Test
@@ -313,14 +328,14 @@ public class RouteResourceCustomModelTest {
                 " \"ch.disable\": true" +
                 "}";
         JsonNode path = getPath(body);
-        assertEquals(8754, path.get("distance").asDouble(), 5);
+        assertEquals(8772, path.get("distance").asDouble(), 10);
 
         // CH
         body = "{\"points\": [[11.556416,50.007739], [11.528864,50.021638]]," +
                 " \"profile\": \"car_no_unclassified\"" +
                 "}";
         path = getPath(body);
-        assertEquals(8754, path.get("distance").asDouble(), 5);
+        assertEquals(8772, path.get("distance").asDouble(), 10);
 
         // different profile
         body = "{\"points\": [[11.494446, 50.027814], [11.511483, 49.987628]]," +
@@ -328,7 +343,7 @@ public class RouteResourceCustomModelTest {
                 " \"ch.disable\": true" +
                 "}";
         path = getPath(body);
-        assertEquals(5827, path.get("distance").asDouble(), 5);
+        assertEquals(5542, path.get("distance").asDouble(), 10);
     }
 
     @Test
@@ -373,15 +388,15 @@ public class RouteResourceCustomModelTest {
                 "   \"speed\": [{\"if\":\"true\", \"limit_to\":\"car_average_speed * 0.9\"}], \n" +
                 "   \"priority\": [{\"if\": \"car_access == false || hgv == NO || max_width < 3 || max_height < 4\", \"multiply_by\": \"0\"}]}}";
         JsonNode path = getPath(body);
-        assertEquals(7314, path.get("distance").asDouble(), 10);
-        assertEquals(944 * 1000, path.get("time").asLong(), 1_000);
+        assertEquals(7350, path.get("distance").asDouble(), 10);
+        assertEquals(952 * 1000, path.get("time").asLong(), 1_000);
     }
 
     @Test
     public void testTurnCosts() {
         String body = "{\"points\": [[11.508198,50.015441], [11.505063,50.01737]], \"profile\": \"car_tc_left\", \"ch.disable\":true }";
         JsonNode path = getPath(body);
-        assertEquals(1067, path.get("distance").asDouble(), 10);
+        assertEquals(1083, path.get("distance").asDouble(), 10);
     }
 
     @Test
@@ -395,8 +410,7 @@ public class RouteResourceCustomModelTest {
         JsonNode json = query(body, 200);
         assertFalse(json.get("info").has("errors"));
 
-        // TODO LATER: alternative route bug as the two routes are identical!?
-        assertEquals(2, json.get("paths").size());
+        assertEquals(1, json.get("paths").size());
         assertEquals(545, json.get("paths").get(0).get("distance").asDouble(), 10);
     }
 

@@ -22,9 +22,11 @@ import com.graphhopper.reader.ReaderWay;
 import com.graphhopper.routing.ev.*;
 import com.graphhopper.routing.util.AllEdgesIterator;
 import com.graphhopper.routing.util.EncodingManager;
+import com.graphhopper.routing.util.TransportationMode;
 import com.graphhopper.routing.util.TraversalMode;
 import com.graphhopper.routing.util.parsers.OrientationCalculator;
 import com.graphhopper.routing.weighting.SpeedWeighting;
+import com.graphhopper.routing.weighting.TurnCostProvider;
 import com.graphhopper.routing.weighting.Weighting;
 import com.graphhopper.storage.BaseGraph;
 import com.graphhopper.storage.Graph;
@@ -221,7 +223,7 @@ public class PathTest {
      * Test roundabout instructions for different profiles
      */
     @Test
-    void testCalcInstructionsRoundabout() {
+    void testCalcInstructionsRoundaboutForDifferentProfiles() {
         calcInstructionsRoundabout(mixedCarSpeedEnc);
         calcInstructionsRoundabout(mixedFootSpeedEnc);
     }
@@ -232,11 +234,12 @@ public class PathTest {
                 .calcPath(1, 8);
         assertTrue(p.isFound());
         assertEquals("[1, 2, 3, 4, 5, 8]", p.calcNodes().toString());
-        InstructionList wayList = InstructionsFromEdges.calcInstructions(p, p.graph, weighting, mixedEncodingManager, tr);
+        InstructionList wayList = InstructionsFromEdges.calcInstructions(p, p.graph, weighting, mixedEncodingManager, tr, true);
         // Test instructions
         List<String> tmpList = getTurnDescriptions(wayList);
         assertEquals(List.of("continue onto MainStreet 1 2",
                         "at roundabout, take exit 3 onto 5-8",
+                        "exit the roundabout onto 5-8",
                         "arrive at destination"),
                 tmpList);
         // Test Radian
@@ -247,10 +250,11 @@ public class PathTest {
         // case of continuing a street through a roundabout
         p = new Dijkstra(roundaboutGraph.g, weighting, TraversalMode.NODE_BASED).
                 calcPath(1, 7);
-        wayList = InstructionsFromEdges.calcInstructions(p, p.graph, weighting, mixedEncodingManager, tr);
+        wayList = InstructionsFromEdges.calcInstructions(p, p.graph, weighting, mixedEncodingManager, tr, true);
         tmpList = getTurnDescriptions(wayList);
         assertEquals(List.of("continue onto MainStreet 1 2",
                         "at roundabout, take exit 2 onto MainStreet 4 7",
+                        "exit the roundabout onto MainStreet 4 7",
                         "arrive at destination"),
                 tmpList);
         // Test Radian
@@ -265,9 +269,10 @@ public class PathTest {
         Path p = new Dijkstra(roundaboutGraph.g, weighting, TraversalMode.NODE_BASED)
                 .calcPath(2, 8);
         assertTrue(p.isFound());
-        InstructionList wayList = InstructionsFromEdges.calcInstructions(p, p.graph, weighting, mixedEncodingManager, tr);
+        InstructionList wayList = InstructionsFromEdges.calcInstructions(p, p.graph, weighting, mixedEncodingManager, tr, true);
         List<String> tmpList = getTurnDescriptions(wayList);
         assertEquals(List.of("at roundabout, take exit 3 onto 5-8",
+                        "exit the roundabout onto 5-8",
                         "arrive at destination"),
                 tmpList);
     }
@@ -279,10 +284,23 @@ public class PathTest {
         Path p = new Dijkstra(roundaboutGraph.g, weighting, TraversalMode.NODE_BASED)
                 .calcPath(6, 8);
         assertTrue(p.isFound());
-        InstructionList wayList = InstructionsFromEdges.calcInstructions(p, p.graph, weighting, mixedEncodingManager, tr);
+        InstructionList wayList = InstructionsFromEdges.calcInstructions(p, p.graph, weighting, mixedEncodingManager, tr, true);
         List<String> tmpList = getTurnDescriptions(wayList);
         assertEquals(List.of("continue onto 3-6",
                         "at roundabout, take exit 3 onto 5-8",
+                        "exit the roundabout onto 5-8",
+                        "arrive at destination"),
+                tmpList);
+
+        // edges from 6 and 9 both go into roundabout but if going from 6 to 9 a roundabout edge is
+        // never crossed and so no roundabout instruction is created
+        p = new Dijkstra(roundaboutGraph.g, weighting, TraversalMode.NODE_BASED)
+                .calcPath(6, 9);
+        assertTrue(p.isFound());
+        wayList = InstructionsFromEdges.calcInstructions(p, p.graph, weighting, mixedEncodingManager, tr);
+        tmpList = getTurnDescriptions(wayList);
+        assertEquals(List.of("continue onto 3-6",
+                        "turn sharp right onto 3-9",
                         "arrive at destination"),
                 tmpList);
         roundaboutGraph.inverse3to9();
@@ -311,6 +329,115 @@ public class PathTest {
         assertEquals(2, averageSpeedDetails.get(2).getFirst());
         assertEquals(3, averageSpeedDetails.get(3).getFirst());
         assertEquals(4, averageSpeedDetails.get(3).getLast());
+    }
+
+    @Test
+    public void testWeightDetailsDoNotIncludeSpuriousUTurnCosts() {
+        // Use a weighting with turn costs: u-turn costs = 1000s so they're easy to spot
+        TurnCostProvider tcp = new TurnCostProvider() {
+            @Override
+            public double calcTurnWeight(int inEdge, int viaNode, int outEdge) {
+                if (inEdge == outEdge) return 1000;
+                return 0;
+            }
+
+            @Override
+            public long calcTurnMillis(int inEdge, int viaNode, int outEdge) {
+                return (long) (1000 * calcTurnWeight(inEdge, viaNode, outEdge));
+            }
+        };
+        Weighting weighting = new SpeedWeighting(carAvSpeedEnc, tcp);
+
+        // Build a graph with turn costs enabled for edge-based traversal
+        BaseGraph graph = new BaseGraph.Builder(carManager).withTurnCosts(true).create();
+        NodeAccess na = graph.getNodeAccess();
+        na.setNode(1, 52.514, 13.348);
+        na.setNode(2, 52.514, 13.349);
+        na.setNode(3, 52.514, 13.350);
+        na.setNode(4, 52.515, 13.349);
+        na.setNode(5, 52.516, 13.3452);
+        graph.edge(1, 2).set(carAvSpeedEnc, 45, 45).setDistance(500);
+        graph.edge(2, 3).set(carAvSpeedEnc, 90, 90).setDistance(500);
+        graph.edge(3, 4).set(carAvSpeedEnc, 45, 45).setDistance(500);
+        graph.edge(4, 5).set(carAvSpeedEnc, 45, 45).setDistance(500);
+
+        Path p = new Dijkstra(graph, weighting, TraversalMode.EDGE_BASED).calcPath(1, 5);
+        assertTrue(p.isFound());
+
+        Map<String, List<PathDetail>> details = PathDetailsFromEdges.calcDetails(p, carManager, weighting,
+                List.of(WEIGHT), new PathDetailsBuilderFactory(), 0, graph);
+
+        List<PathDetail> weightDetails = details.get(WEIGHT);
+        assertEquals(4, weightDetails.size());
+
+        // Weight details should not include u-turn costs (edge matching itself).
+        double totalWeight = 0;
+        for (PathDetail wd : weightDetails) {
+            double w = (double) wd.getValue();
+            // No single edge in this small graph should have weight >= 1000 (the u-turn cost)
+            assertTrue(w < 1000, "Weight detail " + w + " includes spurious u-turn cost");
+            totalWeight += w;
+        }
+
+        // The sum of weight details should approximate the path weight
+        assertEquals(p.getWeight(), totalWeight, 1.e-3);
+    }
+
+    @Test
+    public void testWeightDetailsIncludeTurnCostsOnCorrectSegment() {
+        // Turn cost of 50 (raw) = 500 after SpeedWeighting's 10x scaling, applied at specific transitions
+        final int TURN_COST_EDGE_0_TO_1 = 50;  // turn from edge 0 to edge 1
+        TurnCostProvider tcp = new TurnCostProvider() {
+            @Override
+            public double calcTurnWeight(int inEdge, int viaNode, int outEdge) {
+                if (inEdge == outEdge) return 1000;
+                // Apply a known turn cost only for the transition from edge 0 to edge 1
+                if (inEdge == 0 && outEdge == 1) return TURN_COST_EDGE_0_TO_1;
+                return 0;
+            }
+
+            @Override
+            public long calcTurnMillis(int inEdge, int viaNode, int outEdge) {
+                return (long) (1000 * calcTurnWeight(inEdge, viaNode, outEdge));
+            }
+        };
+        Weighting weighting = new SpeedWeighting(carAvSpeedEnc, tcp);
+
+        BaseGraph graph = new BaseGraph.Builder(carManager).withTurnCosts(true).create();
+        NodeAccess na = graph.getNodeAccess();
+        na.setNode(1, 52.514, 13.348);
+        na.setNode(2, 52.514, 13.349);
+        na.setNode(3, 52.514, 13.350);
+        na.setNode(4, 52.515, 13.349);
+        // All edges same speed/distance so the base edge weight is identical
+        graph.edge(1, 2).set(carAvSpeedEnc, 45, 45).setDistance(500);  // edge 0
+        graph.edge(2, 3).set(carAvSpeedEnc, 45, 45).setDistance(500);  // edge 1
+        graph.edge(3, 4).set(carAvSpeedEnc, 45, 45).setDistance(500);  // edge 2
+
+        // Path: 1 -> 2 -> 3 -> 4, edges: [0, 1, 2]
+        Path p = new Dijkstra(graph, weighting, TraversalMode.EDGE_BASED).calcPath(1, 4);
+        assertTrue(p.isFound());
+
+        Map<String, List<PathDetail>> details = PathDetailsFromEdges.calcDetails(p, carManager, weighting,
+                List.of(WEIGHT), new PathDetailsBuilderFactory(), 0, graph);
+        List<PathDetail> weightDetails = details.get(WEIGHT);
+        assertEquals(3, weightDetails.size());
+
+        double baseEdgeWeight = (double) weightDetails.get(0).getValue();
+
+        // First segment (edge 0): no previous edge, so no turn cost — just edge weight
+        assertEquals(baseEdgeWeight, (double) weightDetails.get(0).getValue(), 1.e-6);
+
+        // Second segment (edge 1): includes turn cost from edge 0 -> edge 1
+        double expectedTurnWeight = Weighting.roundWeight(10.0 * TURN_COST_EDGE_0_TO_1);
+        assertEquals(baseEdgeWeight + expectedTurnWeight, (double) weightDetails.get(1).getValue(), 1.e-6);
+
+        // Third segment (edge 2): transition from edge 1 -> edge 2 has zero turn cost
+        assertEquals(baseEdgeWeight, (double) weightDetails.get(2).getValue(), 1.e-6);
+
+        // Total weight details should match path weight
+        double totalDetails = weightDetails.stream().mapToDouble(wd -> (double) wd.getValue()).sum();
+        assertEquals(p.getWeight(), totalDetails, 1.e-3);
     }
 
     @Test
@@ -529,10 +656,11 @@ public class PathTest {
         Path p = new Dijkstra(roundaboutGraph.g, weighting, TraversalMode.NODE_BASED)
                 .calcPath(1, 8);
         assertTrue(p.isFound());
-        InstructionList wayList = InstructionsFromEdges.calcInstructions(p, p.graph, weighting, mixedEncodingManager, tr);
+        InstructionList wayList = InstructionsFromEdges.calcInstructions(p, p.graph, weighting, mixedEncodingManager, tr, true);
         List<String> tmpList = getTurnDescriptions(wayList);
         assertEquals(List.of("continue onto MainStreet 1 2",
                         "at roundabout, take exit 2 onto 5-8",
+                        "exit the roundabout onto 5-8",
                         "arrive at destination"),
                 tmpList);
         // Test Radian
@@ -607,11 +735,113 @@ public class PathTest {
         Path p = new Dijkstra(graph, weighting, TraversalMode.NODE_BASED)
                 .calcPath(6, 11);
         assertTrue(p.isFound());
-        InstructionList wayList = InstructionsFromEdges.calcInstructions(p, p.graph, weighting, carManager, tr);
+        InstructionList wayList = InstructionsFromEdges.calcInstructions(p, p.graph, weighting, carManager, tr, true);
         List<String> tmpList = getTurnDescriptions(wayList);
         assertEquals(List.of("at roundabout, take exit 1 onto MainStreet 1 11",
+                        "exit the roundabout onto MainStreet 1 11",
                         "arrive at destination"),
                 tmpList);
+    }
+
+    /**
+     * Issue #3215: exiting a named roundabout onto an unnamed road should NOT inherit roundabout name.
+     * Issue #3213: destination tags should be used as fallback when exit road has no name.
+     */
+    @Test
+    public void testRoundaboutExitUnnamedRoadUsesDestination() {
+        final BaseGraph graph = new BaseGraph.Builder(carManager).create();
+        final NodeAccess na = graph.getNodeAccess();
+        BooleanEncodedValue carAccessEnc = carManager.getBooleanEncodedValue(VehicleAccess.key("car"));
+        BooleanEncodedValue rdEnc = carManager.getBooleanEncodedValue(Roundabout.KEY);
+
+        //  1 --- 2 (roundabout) --- 3 (unnamed, has destination)
+        //         \
+        //          4 (exit with name==ref, has destination)
+        na.setNode(1, 52.514, 13.348);
+        na.setNode(2, 52.514, 13.349);
+        na.setNode(3, 52.5135, 13.350);
+        na.setNode(4, 52.514, 13.351);
+        na.setNode(5, 52.5145, 13.351);
+
+        // approach road
+        graph.edge(1, 2).set(carAvSpeedEnc, 60, 60).set(carAccessEnc, true, true).setDistance(5)
+                .setKeyValues(Map.of(STREET_NAME, new KValue("Bonner Weg")));
+
+        // roundabout edges (named "Magic Circle")
+        EdgeIteratorState rb1 = graph.edge(3, 2).set(carAvSpeedEnc, 60, 0).set(carAccessEnc, true, false).setDistance(5)
+                .setKeyValues(Map.of(STREET_NAME, new KValue("Magic Circle")));
+        rb1.set(rdEnc, true);
+        EdgeIteratorState rb2 = graph.edge(4, 3).set(carAvSpeedEnc, 60, 0).set(carAccessEnc, true, false).setDistance(5)
+                .setKeyValues(Map.of(STREET_NAME, new KValue("Magic Circle")));
+        rb2.set(rdEnc, true);
+        EdgeIteratorState rb3 = graph.edge(5, 4).set(carAvSpeedEnc, 60, 0).set(carAccessEnc, true, false).setDistance(5)
+                .setKeyValues(Map.of(STREET_NAME, new KValue("Magic Circle")));
+        rb3.set(rdEnc, true);
+        EdgeIteratorState rb4 = graph.edge(2, 5).set(carAvSpeedEnc, 60, 0).set(carAccessEnc, true, false).setDistance(5)
+                .setKeyValues(Map.of(STREET_NAME, new KValue("Magic Circle")));
+        rb4.set(rdEnc, true);
+
+        // exit road: unnamed, with destination tag (tests #3215 + #3213)
+        graph.edge(4, 6).set(carAvSpeedEnc, 60, 60).set(carAccessEnc, true, true).setDistance(5)
+                .setKeyValues(Map.of(STREET_DESTINATION, new KValue("Euskirchen, BN-Hardtberg")));
+        na.setNode(6, 52.514, 13.352);
+
+        Weighting weighting = new SpeedWeighting(carAvSpeedEnc);
+        Path p = new Dijkstra(graph, weighting, TraversalMode.NODE_BASED).calcPath(1, 6);
+        assertTrue(p.isFound());
+        InstructionList wayList = InstructionsFromEdges.calcInstructions(p, p.graph, weighting, carManager, tr);
+        List<String> descriptions = getTurnDescriptions(wayList);
+
+        // #3215: must NOT say "onto Magic Circle"
+        // #3213: must use destination fallback
+        assertEquals("at roundabout, take exit 1 toward Euskirchen, BN-Hardtberg", descriptions.get(1),
+                "Expected destination fallback, not roundabout name leak");
+    }
+
+    /**
+     * Issue #3213: when exit road name equals ref, destination should be preferred.
+     */
+    @Test
+    public void testRoundaboutExitNameEqualsRefUsesDestination() {
+        final BaseGraph graph = new BaseGraph.Builder(carManager).create();
+        final NodeAccess na = graph.getNodeAccess();
+        BooleanEncodedValue carAccessEnc = carManager.getBooleanEncodedValue(VehicleAccess.key("car"));
+        BooleanEncodedValue rdEnc = carManager.getBooleanEncodedValue(Roundabout.KEY);
+
+        na.setNode(1, 52.514, 13.348);
+        na.setNode(2, 52.514, 13.349);
+        na.setNode(3, 52.5135, 13.350);
+        na.setNode(4, 52.514, 13.351);
+        na.setNode(5, 52.5145, 13.351);
+        na.setNode(6, 52.514, 13.352);
+
+        graph.edge(1, 2).set(carAvSpeedEnc, 60, 60).set(carAccessEnc, true, true).setDistance(5)
+                .setKeyValues(Map.of(STREET_NAME, new KValue("Bonner Weg")));
+
+        EdgeIteratorState rb1 = graph.edge(3, 2).set(carAvSpeedEnc, 60, 0).set(carAccessEnc, true, false).setDistance(5);
+        rb1.set(rdEnc, true);
+        EdgeIteratorState rb2 = graph.edge(4, 3).set(carAvSpeedEnc, 60, 0).set(carAccessEnc, true, false).setDistance(5);
+        rb2.set(rdEnc, true);
+        EdgeIteratorState rb3 = graph.edge(5, 4).set(carAvSpeedEnc, 60, 0).set(carAccessEnc, true, false).setDistance(5);
+        rb3.set(rdEnc, true);
+        EdgeIteratorState rb4 = graph.edge(2, 5).set(carAvSpeedEnc, 60, 0).set(carAccessEnc, true, false).setDistance(5);
+        rb4.set(rdEnc, true);
+
+        // exit road: name == ref ("L 113"), with destination
+        graph.edge(4, 6).set(carAvSpeedEnc, 60, 60).set(carAccessEnc, true, true).setDistance(5)
+                .setKeyValues(Map.of(
+                        STREET_NAME, new KValue("L 113"),
+                        STREET_REF, new KValue("L 113"),
+                        STREET_DESTINATION, new KValue("Euskirchen")));
+
+        Weighting weighting = new SpeedWeighting(carAvSpeedEnc);
+        Path p = new Dijkstra(graph, weighting, TraversalMode.NODE_BASED).calcPath(1, 6);
+        assertTrue(p.isFound());
+        InstructionList wayList = InstructionsFromEdges.calcInstructions(p, p.graph, weighting, carManager, tr);
+        List<String> descriptions = getTurnDescriptions(wayList);
+
+        assertEquals("at roundabout, take exit 1 toward Euskirchen", descriptions.get(1),
+                "When name==ref, destination should be preferred over raw ref");
     }
 
     @Test
@@ -621,10 +851,11 @@ public class PathTest {
         Path p = new Dijkstra(roundaboutGraph.g, weighting, TraversalMode.NODE_BASED)
                 .calcPath(1, 8);
         assertTrue(p.isFound());
-        InstructionList wayList = InstructionsFromEdges.calcInstructions(p, p.graph, weighting, mixedEncodingManager, tr);
+        InstructionList wayList = InstructionsFromEdges.calcInstructions(p, p.graph, weighting, mixedEncodingManager, tr, true);
         List<String> tmpList = getTurnDescriptions(wayList);
         assertEquals(List.of("continue onto MainStreet 1 2",
                         "at roundabout, take exit 1 onto 5-8",
+                        "exit the roundabout onto 5-8",
                         "arrive at destination"),
                 tmpList);
         // Test Radian
@@ -657,6 +888,81 @@ public class PathTest {
 
         // Contain only start and finish instruction
         assertEquals(2, wayList.size());
+    }
+
+    @Test
+    public void testCalcInstructionsTurnIfOnlyAlternativeIsCarOnly() {
+        DecimalEncodedValue speedEnc = new DecimalEncodedValueImpl("speed", 5, 5, true);
+        BooleanEncodedValue bikeAccessEnc = VehicleAccess.create("bike");
+        EncodingManager em = EncodingManager.start().add(speedEnc).add(bikeAccessEnc).add(VehicleAccess.create("car")).
+                add(Roundabout.create()).add(RoadClass.create()).add(RoadEnvironment.create()).
+                add(RoadClassLink.create()).add(MaxSpeed.create()).build();
+        BooleanEncodedValue carAccessEnc = em.getBooleanEncodedValue(VehicleAccess.key("car"));
+        final BaseGraph graph = new BaseGraph.Builder(em).create();
+        final NodeAccess na = graph.getNodeAccess();
+
+        // 1 -- 2 -- 3
+        //      |
+        //      4
+        na.setNode(1, 52.514, 13.348);
+        na.setNode(2, 52.514, 13.349);
+        na.setNode(3, 52.514, 13.350);
+        na.setNode(4, 52.513, 13.349);
+
+        graph.edge(1, 2).set(speedEnc, 20, 20).set(bikeAccessEnc, true, true).setDistance(70).setKeyValues(Map.of(STREET_NAME, new KValue("Main")));
+        // the continuation of Main is for cars only
+        EdgeIteratorState carOnlyEdge = graph.edge(2, 3).set(speedEnc, 60, 60).set(carAccessEnc, true, true).setDistance(70).setKeyValues(Map.of(STREET_NAME, new KValue("Main")));
+        graph.edge(2, 4).set(speedEnc, 20, 20).set(bikeAccessEnc, true, true).setDistance(110).setKeyValues(Map.of(STREET_NAME, new KValue("Side")));
+
+        Weighting bikeWeighting = new SpeedWeighting(speedEnc) {
+            @Override
+            public double calcEdgeWeight(EdgeIteratorState edgeState, boolean reverse) {
+                return edgeState.getEdge() == carOnlyEdge.getEdge() ? Double.POSITIVE_INFINITY : super.calcEdgeWeight(edgeState, reverse);
+            }
+        };
+        Path p = new Dijkstra(graph, bikeWeighting, TraversalMode.NODE_BASED).calcPath(1, 4);
+        assertTrue(p.isFound());
+
+        // although the bike can neither access nor use the continuation of Main, the driver sees it and
+        // so the turn must be created
+        InstructionList wayList = InstructionsFromEdges.calcInstructions(p, graph, bikeWeighting, TransportationMode.BIKE, em, tr, false);
+        assertEquals(3, wayList.size());
+        assertEquals("turn right onto Side", wayList.get(1).getTurnDescription(tr));
+    }
+
+    @Test
+    public void testCalcInstructionsTurnIfOnlyAlternativeIsBlocked() {
+        final BaseGraph graph = new BaseGraph.Builder(carManager).create();
+        final NodeAccess na = graph.getNodeAccess();
+
+        // 1 -- 2 -- 3
+        //      |
+        //      4
+        na.setNode(1, 52.514, 13.348);
+        na.setNode(2, 52.514, 13.349);
+        na.setNode(3, 52.514, 13.350);
+        na.setNode(4, 52.513, 13.349);
+
+        BooleanEncodedValue carAccessEnc = carManager.getBooleanEncodedValue(VehicleAccess.key("car"));
+        graph.edge(1, 2).set(carAvSpeedEnc, 60, 60).set(carAccessEnc, true, true).setDistance(70).setKeyValues(Map.of(STREET_NAME, new KValue("Main")));
+        EdgeIteratorState blockedEdge = graph.edge(2, 3).set(carAvSpeedEnc, 60, 60).set(carAccessEnc, true, true).setDistance(70).setKeyValues(Map.of(STREET_NAME, new KValue("Main")));
+        graph.edge(2, 4).set(carAvSpeedEnc, 60, 60).set(carAccessEnc, true, true).setDistance(110).setKeyValues(Map.of(STREET_NAME, new KValue("Side")));
+
+        // simulates a query-time custom model blocking the continuation of Main
+        Weighting blockedWeighting = new SpeedWeighting(carAvSpeedEnc) {
+            @Override
+            public double calcEdgeWeight(EdgeIteratorState edgeState, boolean reverse) {
+                return edgeState.getEdge() == blockedEdge.getEdge() ? Double.POSITIVE_INFINITY : super.calcEdgeWeight(edgeState, reverse);
+            }
+        };
+        Path p = new Dijkstra(graph, blockedWeighting, TraversalMode.NODE_BASED).calcPath(1, 4);
+        assertTrue(p.isFound());
+
+        // the blocked edge is invisible for the weighting but not for the driver (car access), so
+        // the turn must be created, see #3223
+        InstructionList wayList = InstructionsFromEdges.calcInstructions(p, graph, blockedWeighting, carManager, tr);
+        assertEquals(3, wayList.size());
+        assertEquals("turn right onto Side", wayList.get(1).getTurnDescription(tr));
     }
 
     @Test
@@ -1148,21 +1454,39 @@ public class PathTest {
         assertEquals("[7, 8, 9, 10]", p.calcNodes().toString());
         InstructionList wayList = InstructionsFromEdges.calcInstructions(p, g, weighting, manager, tr);
         assertEquals("at roundabout, take exit 1 onto Southeast in", wayList.get(1).getTurnDescription(tr));
+        assertEquals(15, wayList.stream().mapToDouble(Instruction::getDistance).sum());
 
         p = new Dijkstra(g, weighting, TraversalMode.NODE_BASED).calcPath(10, 1);
         assertEquals("[10, 9, 5, 3, 2, 1]", p.calcNodes().toString());
         wayList = InstructionsFromEdges.calcInstructions(p, g, weighting, manager, tr);
         assertEquals("at roundabout, take exit 2 onto Nordwest, foot-only", wayList.get(1).getTurnDescription(tr));
+        assertEquals(25, wayList.stream().mapToDouble(Instruction::getDistance).sum());
 
         p = new Dijkstra(g, weighting, TraversalMode.NODE_BASED).calcPath(10, 4);
         assertEquals("[10, 9, 5, 3, 4]", p.calcNodes().toString());
         wayList = InstructionsFromEdges.calcInstructions(p, g, weighting, manager, tr);
         assertEquals("at roundabout, take exit 1 onto Nordeast in", wayList.get(1).getTurnDescription(tr));
+        assertEquals(20, wayList.stream().mapToDouble(Instruction::getDistance).sum());
 
         p = new Dijkstra(g, weighting, TraversalMode.NODE_BASED).calcPath(10, 6);
         assertEquals("[10, 9, 5, 6]", p.calcNodes().toString());
         wayList = InstructionsFromEdges.calcInstructions(p, g, weighting, manager, tr);
         assertEquals("at roundabout, take exit 1 onto Nordeast out", wayList.get(1).getTurnDescription(tr));
+        assertEquals(15, wayList.stream().mapToDouble(Instruction::getDistance).sum());
+
+        // a foot-only exit (no car access at all) is counted for foot, but not for car
+        na.setNode(11, 52.50395, 13.41075);
+        g.edge(3, 11).setDistance(5).set(carAccessEnc, false, false).set(footAccessEnc, true, true).setKeyValues(Map.of(STREET_NAME, new KValue("North, foot-only")));
+        p = new Dijkstra(g, weighting, TraversalMode.NODE_BASED).calcPath(10, 0);
+        assertEquals("[10, 9, 5, 3, 2, 0]", p.calcNodes().toString());
+        wayList = InstructionsFromEdges.calcInstructions(p, g, weighting, manager, tr);
+        assertEquals("at roundabout, take exit 3 onto Nordwest", wayList.get(1).getTurnDescription(tr));
+
+        Weighting carWeighting = new AccessWeighting(carAccessEnc);
+        p = new Dijkstra(g, carWeighting, TraversalMode.NODE_BASED).calcPath(10, 0);
+        assertEquals("[10, 9, 5, 3, 2, 0]", p.calcNodes().toString());
+        wayList = InstructionsFromEdges.calcInstructions(p, g, carWeighting, manager, tr);
+        assertEquals("at roundabout, take exit 2 onto Nordwest", wayList.get(1).getTurnDescription(tr));
     }
 
     static class AccessWeighting implements Weighting {

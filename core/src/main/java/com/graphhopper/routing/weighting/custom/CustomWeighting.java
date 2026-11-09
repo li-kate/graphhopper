@@ -24,6 +24,7 @@ import com.graphhopper.storage.BaseGraph;
 import com.graphhopper.util.CustomModel;
 import com.graphhopper.util.EdgeIteratorState;
 
+import static com.graphhopper.routing.weighting.Weighting.roundWeight;
 import static com.graphhopper.routing.weighting.TurnCostProvider.NO_TURN_COST_PROVIDER;
 
 /**
@@ -87,28 +88,28 @@ public final class CustomWeighting implements Weighting {
     private final MaxCalc maxPrioCalc;
     private final MaxCalc maxSpeedCalc;
 
-    public CustomWeighting(TurnCostProvider turnCostProvider, Parameters parameters) {
+    public CustomWeighting(TurnCostProvider turnCostProvider, Config config) {
         if (!Weighting.isValidName(getName()))
             throw new IllegalStateException("Not a valid name for a Weighting: " + getName());
         this.turnCostProvider = turnCostProvider;
 
-        this.edgeToSpeedMapping = parameters.getEdgeToSpeedMapping();
-        this.maxSpeedCalc = parameters.getMaxSpeedCalc();
+        this.edgeToSpeedMapping = config.getEdgeToSpeedMapping();
+        this.maxSpeedCalc = config.getMaxSpeedCalc();
 
-        this.edgeToPriorityMapping = parameters.getEdgeToPriorityMapping();
-        this.maxPrioCalc = parameters.getMaxPrioCalc();
+        this.edgeToPriorityMapping = config.getEdgeToPriorityMapping();
+        this.maxPrioCalc = config.getMaxPrioCalc();
 
-        this.headingPenaltySeconds = parameters.getHeadingPenaltySeconds();
+        this.headingPenaltySeconds = config.getHeadingPenaltySeconds();
 
         // given unit is s/km -> convert to s/m
-        this.distanceInfluence = parameters.getDistanceInfluence() / 1000.0;
+        this.distanceInfluence = config.getDistanceInfluence() / 1000.0;
         if (this.distanceInfluence < 0)
             throw new IllegalArgumentException("distance_influence cannot be negative " + this.distanceInfluence);
     }
 
     @Override
     public double calcMinWeightPerDistance() {
-        return 1d / (maxSpeedCalc.calcMax() / SPEED_CONV) / maxPrioCalc.calcMax() + distanceInfluence;
+        return 10 * (1d / (maxSpeedCalc.calcMax() / SPEED_CONV) / maxPrioCalc.calcMax() + distanceInfluence);
     }
 
     @Override
@@ -123,7 +124,9 @@ public final class CustomWeighting implements Weighting {
         if (edgeState.get(EdgeIteratorState.UNFAVORED_EDGE)) seconds += headingPenaltySeconds;
         double distanceCosts = distance * distanceInfluence;
         if (Double.isInfinite(distanceCosts)) return Double.POSITIVE_INFINITY;
-        return seconds / priority + distanceCosts;
+        // we limit the weight increase due to priority to 1M (i.e. ~28h). this guards against
+        // tiny priority factors (for example applying 0.001 multiple times to the same edge)
+        return roundWeight(10 * (Math.min(seconds / priority, seconds + 100_000) + distanceCosts));
     }
 
     double calcSeconds(double distance, EdgeIteratorState edgeState, boolean reverse) {
@@ -143,7 +146,8 @@ public final class CustomWeighting implements Weighting {
 
     @Override
     public double calcTurnWeight(int inEdge, int viaNode, int outEdge) {
-        return turnCostProvider.calcTurnWeight(inEdge, viaNode, outEdge);
+        double turnWeight = turnCostProvider.calcTurnWeight(inEdge, viaNode, outEdge);
+        return roundWeight(10 * turnWeight);
     }
 
     @Override
@@ -175,7 +179,7 @@ public final class CustomWeighting implements Weighting {
         double calcMax();
     }
 
-    public static class Parameters {
+    public static class Config {
         private final EdgeToDoubleMapping edgeToSpeedMapping;
         private final EdgeToDoubleMapping edgeToPriorityMapping;
         private final MaxCalc maxSpeedCalc;
@@ -184,7 +188,7 @@ public final class CustomWeighting implements Weighting {
         private final double distanceInfluence;
         private final double headingPenaltySeconds;
 
-        public Parameters(EdgeToDoubleMapping edgeToSpeedMapping, MaxCalc maxSpeedCalc,
+        public Config(EdgeToDoubleMapping edgeToSpeedMapping, MaxCalc maxSpeedCalc,
                           EdgeToDoubleMapping edgeToPriorityMapping, MaxCalc maxPrioCalc,
                           TurnPenaltyMapping turnPenaltyMapping,
                           double distanceInfluence, double headingPenaltySeconds) {

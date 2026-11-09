@@ -33,6 +33,7 @@ import com.graphhopper.routing.ev.RoadEnvironment;
 import com.graphhopper.routing.ev.Surface;
 import com.graphhopper.util.BodyAndStatus;
 import com.graphhopper.util.Helper;
+import com.graphhopper.util.Instruction;
 import com.graphhopper.util.InstructionList;
 import com.graphhopper.util.Parameters;
 import com.graphhopper.util.details.PathDetail;
@@ -40,6 +41,9 @@ import com.graphhopper.util.exceptions.PointOutOfBoundsException;
 import com.graphhopper.util.shapes.GHPoint;
 import io.dropwizard.testing.junit5.DropwizardAppExtension;
 import io.dropwizard.testing.junit5.DropwizardExtensionsSupport;
+import jakarta.ws.rs.client.Entity;
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -47,11 +51,9 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
-import jakarta.ws.rs.client.Entity;
-import jakarta.ws.rs.core.MediaType;
-import jakarta.ws.rs.core.Response;
 import java.io.File;
 import java.util.*;
+import java.util.stream.Collectors;
 
 import static com.graphhopper.application.resources.Util.getWithStatus;
 import static com.graphhopper.application.util.TestUtils.clientTarget;
@@ -67,31 +69,21 @@ import static org.junit.jupiter.api.Assertions.*;
 @ExtendWith(DropwizardExtensionsSupport.class)
 public class RouteResourceTest {
 
-    // for this test we use a non-standard profile name
-    private static final Map<String, String> mapboxResolver = new HashMap<String, String>() {
-        {
-            put("driving", "my_car");
-            put("driving-traffic", "my_car");
-        }
-    };
-
     private static final String DIR = "./target/andorra-gh/";
     private static final DropwizardAppExtension<GraphHopperServerConfiguration> app = new DropwizardAppExtension<>(GraphHopperApplication.class, createConfig());
 
     private static GraphHopperServerConfiguration createConfig() {
         GraphHopperServerConfiguration config = new GraphHopperServerTestConfiguration();
         config.getGraphHopperConfiguration().
-                putObject("profiles_mapbox", mapboxResolver).
                 putObject("prepare.min_network_size", 0).
                 putObject("datareader.file", "../core/files/andorra.osm.pbf").
-                putObject("graph.encoded_values", "road_class,surface,road_environment,max_speed,country").
                 putObject("max_speed_calculator.enabled", true).
                 putObject("graph.urban_density.threads", 1). // for max_speed_calculator
                 putObject("graph.urban_density.city_radius", 0).
                 putObject("import.osm.ignored_highways", "").
                 putObject("graph.location", DIR).
                 // adding this so the corresponding check is not just skipped...
-                putObject(MAX_NON_CH_POINT_DISTANCE, 10e6).
+                        putObject(MAX_NON_CH_POINT_DISTANCE, 10e6).
                 putObject("routing.snap_preventions_default", "tunnel, bridge, ferry").
                 putObject("graph.encoded_values", "road_class, surface, road_environment, max_speed, country, " +
                         "car_access, car_average_speed, " +
@@ -149,15 +141,6 @@ public class RouteResourceTest {
     }
 
     @Test
-    public void testBasicNavigationQuery() {
-        JsonNode json = clientTarget(app, "/navigate/directions/v5/gh/driving/1.537174,42.507145;1.539116,42.511368?" +
-                "access_token=pk.my_api_key&alternatives=true&geometries=polyline6&overview=full&steps=true&continue_straight=true&" +
-                "annotations=congestion%2Cdistance&language=en&roundabout_exits=true&voice_instructions=true&banner_instructions=true&voice_units=metric").
-                request().get(JsonNode.class);
-        assertEquals(1256, json.get("routes").get(0).get("distance").asDouble(), 20);
-    }
-
-    @Test
     public void testWrongPointFormat() {
         BodyAndStatus response = getWithStatus(clientTarget(app, "/route?profile=my_car&point=1234&point=42.510071,1.548128"));
         assertEquals(400, response.getStatus());
@@ -182,6 +165,64 @@ public class RouteResourceTest {
         double distance = path.get("distance").asDouble();
         assertTrue(distance > 9000, "distance wasn't correct:" + distance);
         assertTrue(distance < 9500, "distance wasn't correct:" + distance);
+    }
+
+    @Test
+    public void testAnnouncedViaPoints() {
+        GraphHopperWeb hopper = new GraphHopperWeb(clientUrl(app, "/route"));
+        GHPoint from = new GHPoint(42.554851, 1.536198), to = new GHPoint(42.510071, 1.548128);
+        ResponsePath direct = hopper.route(new GHRequest(from, to).setProfile("my_car")).getBest();
+        InstructionList directInstructions = direct.getInstructions();
+        // via points on the route: somewhere on a street and exactly at the turn of an instruction
+        GHPoint onStreet = direct.getPoints().get(direct.getPoints().size() / 2);
+        Instruction turn = directInstructions.stream().filter(i -> Math.abs(i.getSign()) == Instruction.TURN_RIGHT).findFirst().get();
+        GHPoint atTurn = turn.getPoints().get(0);
+        Instruction roundabout = directInstructions.stream().filter(i -> i.getSign() == Instruction.ROUNDABOUT_USE && i.getPoints().size() > 2).findFirst().get();
+        GHPoint inRoundabout = roundabout.getPoints().get(1);
+
+        for (GHPoint via : List.of(onStreet, atTurn, inRoundabout)) {
+            GHResponse rsp = hopper.route(new GHRequest().setProfile("my_car").setPoints(List.of(from, via, to)));
+            assertFalse(rsp.hasErrors(), rsp.getErrors().toString());
+            assertTrue(toString(rsp.getBest().getInstructions()).contains(REACHED_VIA + ","));
+
+            rsp = hopper.route(new GHRequest().setProfile("my_car").setPoints(List.of(from, via, to)).setAnnouncedViaPoints(List.of()));
+            assertFalse(rsp.hasErrors(), rsp.getErrors().toString());
+            ResponsePath path = rsp.getBest();
+            assertEquals(toString(directInstructions), toString(path.getInstructions()), "via " + via);
+            assertEquals(direct.getDistance(), path.getDistance(), 1);
+            assertEquals(path.getTime(), path.getInstructions().stream().mapToLong(Instruction::getTime).sum());
+            assertEquals(3, path.getWaypoints().size());
+        }
+
+        // skipped via points are not counted
+        GHResponse rsp4 = hopper.route(new GHRequest().setProfile("my_car").setPoints(List.of(from, onStreet, atTurn, to)).setAnnouncedViaPoints(List.of(2)));
+        assertTrue(toString(rsp4.getBest().getInstructions()).contains("5,Waypoint 1,"), toString(rsp4.getBest().getInstructions()));
+        assertFalse(toString(rsp4.getBest().getInstructions()).contains("Waypoint 2,"));
+
+        // explicitly announced is the same as the default
+        GHResponse rsp = hopper.route(new GHRequest().setProfile("my_car").setPoints(List.of(from, onStreet, to)).setAnnouncedViaPoints(List.of(1)));
+        assertTrue(toString(rsp.getBest().getInstructions()).contains(REACHED_VIA + ","));
+
+        rsp = hopper.route(new GHRequest().setProfile("my_car").setPoints(List.of(from, onStreet, to)).setAnnouncedViaPoints(List.of(3)));
+        assertEquals("announced_via_points must contain point indices from 0 to 2, but was: [3]", rsp.getErrors().get(0).getMessage());
+        rsp = hopper.route(new GHRequest().setProfile("my_car").setPoints(List.of(from, onStreet, to)).setAnnouncedViaPoints(List.of(1, 1)));
+        assertEquals("announced_via_points must be strictly increasing, but was: [1, 1]", rsp.getErrors().get(0).getMessage());
+
+        // a u-turn at a via point is kept, start and end are accepted like for Mapbox
+        rsp = hopper.route(new GHRequest().setProfile("foot").setPoints(List.of(from, onStreet, from)).setAnnouncedViaPoints(List.of(0, 2)));
+        assertFalse(rsp.hasErrors(), rsp.getErrors().toString());
+        assertTrue(toString(rsp.getBest().getInstructions()).contains(Instruction.U_TURN_UNKNOWN + ","), toString(rsp.getBest().getInstructions()));
+    }
+
+    @Test
+    public void testAnnouncedViaPointsGET() {
+        BodyAndStatus response = getWithStatus(clientTarget(app, "/route?profile=my_car&point=42.554851,1.536198&point=42.510071,1.548128&announced_via_points=1"));
+        assertEquals(400, response.getStatus());
+        assertEquals("announced_via_points is currently only supported for POST requests", response.getBody().get("message").asText());
+    }
+
+    private static String toString(InstructionList instructions) {
+        return instructions.stream().map(i -> i.getSign() + "," + i.getName() + "," + Math.round(i.getDistance())).collect(Collectors.joining("; "));
     }
 
     @Test
@@ -253,6 +294,21 @@ public class RouteResourceTest {
         assertEquals("At roundabout, take exit 2", instructions.get(4).getTurnDescription(null));
         assertEquals(true, instructions.get(4).getExtraInfoJSON().get("exited"));
         assertEquals(false, instructions.get(23).getExtraInfoJSON().get("exited"));
+
+        // with roundabout_exits=true there is an additional instruction for every exited roundabout
+        rsp = hopper.route(new GHRequest().
+                setProfile("my_car").
+                addPoint(new GHPoint(42.554851, 1.536198)).
+                addPoint(new GHPoint(42.531896, 1.553278)).
+                addPoint(new GHPoint(42.510071, 1.548128)).
+                putHint("roundabout_exits", true));
+        assertTrue(rsp.getErrors().isEmpty(), rsp.getErrors().toString());
+        instructions = rsp.getBest().getInstructions();
+        assertEquals(35, instructions.size());
+        assertEquals("At roundabout, take exit 2", instructions.get(4).getTurnDescription(null));
+        assertEquals(false, instructions.get(4).getExtraInfoJSON().get("exited"));
+        assertEquals(true, instructions.get(5).getExtraInfoJSON().get("exited"));
+        assertNull(instructions.get(10).getExtraInfoJSON().get("exited"));
     }
 
     @Test
@@ -643,6 +699,37 @@ public class RouteResourceTest {
         assertEquals(400, response.getStatus());
         JsonNode json = response.getBody();
         assertEquals("The number of 'heading' parameters must be zero, one or equal to the number of points (1)", json.get("message").asText());
+    }
+
+    @Test
+    public void testPostWithNullHeadings() {
+        // Test that null values in headings array are accepted and converted to NaN (issue #3192)
+        String jsonStr = "{ \"profile\": \"my_car\", " +
+                "\"points\": [[1.536198,42.554851], [1.548128, 42.510071]], " +
+                "\"headings\": [10, null], " +
+                "\"ch.disable\": true }";
+        JsonNode json = clientTarget(app, "/route").request().post(Entity.json(jsonStr), JsonNode.class);
+        JsonNode infoJson = json.get("info");
+        assertFalse(infoJson.has("errors"));
+        JsonNode path = json.get("paths").get(0);
+        double distance = path.get("distance").asDouble();
+
+        // The route should succeed despite the null in headings
+        assertTrue(distance > 9000, "distance wasn't correct:" + distance);
+        assertTrue(distance < 9500, "distance wasn't correct:" + distance);
+
+        // Also test mixing null with "NaN" string for backward compatibility
+        jsonStr = "{ \"profile\": \"my_car\", " +
+                "\"points\": [[1.536198,42.554851], [1.548128, 42.510071]], " +
+                "\"headings\": [null, \"NaN\"], " +
+                "\"ch.disable\": true }";
+        json = clientTarget(app, "/route").request().post(Entity.json(jsonStr), JsonNode.class);
+        infoJson = json.get("info");
+        assertFalse(infoJson.has("errors"));
+        path = json.get("paths").get(0);
+        distance = path.get("distance").asDouble();
+        assertTrue(distance > 9000, "distance wasn't correct:" + distance);
+        assertTrue(distance < 9500, "distance wasn't correct:" + distance);
     }
 
     @ParameterizedTest

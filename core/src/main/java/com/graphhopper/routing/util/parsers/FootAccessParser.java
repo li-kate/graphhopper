@@ -28,7 +28,6 @@ import java.util.*;
 
 import static com.graphhopper.routing.ev.RouteNetwork.*;
 import static com.graphhopper.routing.util.PriorityCode.UNCHANGED;
-import static com.graphhopper.routing.util.parsers.OSMTemporalAccessParser.hasPermissiveTemporalRestriction;
 
 public class FootAccessParser extends AbstractAccessParser implements TagParser {
 
@@ -39,7 +38,6 @@ public class FootAccessParser extends AbstractAccessParser implements TagParser 
     public FootAccessParser(EncodedValueLookup lookup, PMap properties) {
         this(lookup.getBooleanEncodedValue(VehicleAccess.key("foot")));
         blockPrivate(properties.getBool("block_private", true));
-        blockFords(properties.getBool("block_fords", false));
     }
 
     protected FootAccessParser(BooleanEncodedValue accessEnc) {
@@ -51,6 +49,7 @@ public class FootAccessParser extends AbstractAccessParser implements TagParser 
         sidewalkValues.add("right");
 
         barriers.add("fence");
+        barriers.add("wall");
 
         allowedHighwayTags.add("footway");
         allowedHighwayTags.add("path");
@@ -114,20 +113,9 @@ public class FootAccessParser extends AbstractAccessParser implements TagParser 
         if ("via_ferrata".equals(highwayValue))
             return WayAccess.CAN_SKIP;
 
-        int firstIndex = way.getFirstIndex(restrictionKeys);
-        if (firstIndex >= 0) {
-            String firstValue = way.getTag(restrictionKeys.get(firstIndex), "");
-            String[] restrict = firstValue.split(";");
-            // if any of the values allows access then return early (regardless of the order)
-            for (String value : restrict) {
-                if (allowedValues.contains(value))
-                    return WayAccess.WAY;
-            }
-            for (String value : restrict) {
-                if (restrictedValues.contains(value) && !hasPermissiveTemporalRestriction(way, firstIndex, restrictionKeys, allowedValues))
-                    return WayAccess.CAN_SKIP;
-            }
-        }
+        WayAccess access = getAccessFromRestrictions(way);
+        if (access != null)
+            return access;
 
         if (way.hasTag("sidewalk", sidewalkValues))
             return WayAccess.WAY;
@@ -136,9 +124,6 @@ public class FootAccessParser extends AbstractAccessParser implements TagParser 
             return WayAccess.CAN_SKIP;
 
         if (way.hasTag("motorroad", "yes"))
-            return WayAccess.CAN_SKIP;
-
-        if (isBlockFords() && ("ford".equals(highwayValue) || way.hasTag("ford")))
             return WayAccess.CAN_SKIP;
 
         return WayAccess.WAY;
@@ -151,8 +136,7 @@ public class FootAccessParser extends AbstractAccessParser implements TagParser 
             return;
 
         if (way.hasTag("oneway:foot", ONEWAYS) || way.hasTag("foot:backward") || way.hasTag("foot:forward")
-                || way.hasTag("oneway", ONEWAYS) && way.hasTag("highway", "steps") // outdated mapping style
-        ) {
+                || way.hasTag("oneway", ONEWAYS) && (way.hasTag("highway", "steps")  /* <- outdated mapping style */ || access.isFerry())) {
             boolean reverse = way.hasTag("oneway:foot", "-1") || way.hasTag("foot:backward", "yes") || way.hasTag("foot:forward", "no");
             accessEnc.setBool(reverse, edgeId, edgeIntAccess, true);
         } else {

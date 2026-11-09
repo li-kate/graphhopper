@@ -19,7 +19,8 @@
 package com.graphhopper;
 
 import com.fasterxml.jackson.annotation.JsonAnySetter;
-import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonSetter;
+import com.fasterxml.jackson.annotation.Nulls;
 import com.graphhopper.config.CHProfile;
 import com.graphhopper.config.LMProfile;
 import com.graphhopper.config.Profile;
@@ -44,9 +45,9 @@ public class GraphHopperConfig {
 
     public GraphHopperConfig() {
         this(new PMap());
-        // This includes the required attribution for OpenStreetMap.
+        // This includes the required attribution for OpenStreetMap. Do not remove it.
         // Do not hesitate to  mention us and link us in your about page
-        // https://support.graphhopper.com/support/search/solutions?term=attribution
+        // https://www.graphhopper.com/attribution/
         copyrights.add("GraphHopper");
         copyrights.add("OpenStreetMap contributors");
     }
@@ -67,6 +68,7 @@ public class GraphHopperConfig {
         return profiles;
     }
 
+    @JsonSetter(nulls = Nulls.AS_EMPTY)
     public GraphHopperConfig setProfiles(List<Profile> profiles) {
         this.profiles = profiles;
         return this;
@@ -76,7 +78,7 @@ public class GraphHopperConfig {
         return chProfiles;
     }
 
-    @JsonProperty("profiles_ch")
+    @JsonSetter(value = "profiles_ch", nulls = Nulls.AS_EMPTY)
     public GraphHopperConfig setCHProfiles(List<CHProfile> chProfiles) {
         this.chProfiles = chProfiles;
         return this;
@@ -86,7 +88,7 @@ public class GraphHopperConfig {
         return lmProfiles;
     }
 
-    @JsonProperty("profiles_lm")
+    @JsonSetter(value = "profiles_lm", nulls = Nulls.AS_EMPTY)
     public GraphHopperConfig setLMProfiles(List<LMProfile> lmProfiles) {
         this.lmProfiles = lmProfiles;
         return this;

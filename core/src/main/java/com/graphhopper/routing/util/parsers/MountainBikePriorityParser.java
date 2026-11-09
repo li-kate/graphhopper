@@ -12,19 +12,14 @@ import static com.graphhopper.routing.util.PriorityCode.*;
 public class MountainBikePriorityParser extends BikeCommonPriorityParser {
 
     public MountainBikePriorityParser(EncodedValueLookup lookup) {
-        this(lookup.getDecimalEncodedValue(VehicleSpeed.key("mtb")),
-                lookup.getDecimalEncodedValue(VehiclePriority.key("mtb")),
-                lookup.getEnumEncodedValue(BikeNetwork.KEY, RouteNetwork.class));
+        this(lookup.getDecimalEncodedValue(VehiclePriority.key("mtb")));
     }
 
-    protected MountainBikePriorityParser(DecimalEncodedValue speedEnc, DecimalEncodedValue priorityEnc,
-                                         EnumEncodedValue<RouteNetwork> bikeRouteEnc) {
-        super(priorityEnc, speedEnc, bikeRouteEnc);
+    protected MountainBikePriorityParser(DecimalEncodedValue priorityEnc) {
+        super(priorityEnc);
 
-        routeMap.put(INTERNATIONAL, PREFER.getValue());
-        routeMap.put(NATIONAL, PREFER.getValue());
-        routeMap.put(REGIONAL, PREFER.getValue());
-        routeMap.put(LOCAL, BEST.getValue());
+        avoidHighwayTags.put("primary", BAD);
+        avoidHighwayTags.put("primary_link", BAD);
 
         preferHighwayTags.add("road");
         preferHighwayTags.add("track");
@@ -34,13 +29,14 @@ public class MountainBikePriorityParser extends BikeCommonPriorityParser {
         preferHighwayTags.add("tertiary_link");
         preferHighwayTags.add("residential");
         preferHighwayTags.add("unclassified");
+        preferHighwayTags.add("cycleway");
 
         setSpecificClassBicycle("mtb");
     }
 
     @Override
-    void collect(ReaderWay way, double wayTypeSpeed, TreeMap<Double, PriorityCode> weightToPrioMap) {
-        super.collect(way, wayTypeSpeed, weightToPrioMap);
+    void collect(ReaderWay way, boolean bikeDesignated, TreeMap<Double, PriorityCode> weightToPrioMap) {
+        super.collect(way, bikeDesignated, weightToPrioMap);
 
         String highway = way.getTag("highway");
         if ("track".equals(highway)) {

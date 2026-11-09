@@ -18,10 +18,12 @@
 package com.graphhopper.storage;
 
 import java.io.File;
-import java.util.*;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 import static com.graphhopper.storage.DAType.RAM_INT;
-import static com.graphhopper.storage.DAType.RAM_INT_STORE;
 import static com.graphhopper.util.Helper.*;
 
 /**
@@ -36,8 +38,14 @@ public class GHDirectory implements Directory {
     private final Map<String, DAType> defaultTypes = new LinkedHashMap<>();
     private final Map<String, Integer> mmapPreloads = new LinkedHashMap<>();
     private final Map<String, DataAccess> map = Collections.synchronizedMap(new HashMap<>());
+    private final int defaultSegmentSize;
+    private boolean readOnly;
 
     public GHDirectory(String _location, DAType defaultType) {
+        this(_location, defaultType, AbstractDataAccess.SEGMENT_SIZE_DEFAULT);
+    }
+
+    public GHDirectory(String _location, DAType defaultType, int defaultSegmentSize) {
         this.typeFallback = defaultType;
         if (isEmpty(_location))
             _location = new File("").getAbsolutePath();
@@ -49,6 +57,8 @@ public class GHDirectory implements Directory {
         File dir = new File(location);
         if (dir.exists() && !dir.isDirectory())
             throw new RuntimeException("file '" + dir + "' exists but is not a directory");
+
+        this.defaultSegmentSize = defaultSegmentSize;
     }
 
     /**
@@ -87,11 +97,13 @@ public class GHDirectory implements Directory {
 
     public void loadMMap() {
         for (DataAccess da : map.values()) {
-            if (!(da instanceof MMapDataAccess))
-                continue;
             int preload = getPreload(da.getName());
-            if (preload > 0)
+            if (preload <= 0)
+                continue;
+            if (da instanceof MMapDataAccess)
                 ((MMapDataAccess) da).load(preload);
+            else if (da instanceof MMapForeignMemoryDataAccess)
+                ((MMapForeignMemoryDataAccess) da).load(preload);
         }
     }
 
@@ -113,7 +125,7 @@ public class GHDirectory implements Directory {
 
     @Override
     public DataAccess create(String name, DAType type) {
-        return create(name, type, -1);
+        return create(name, type, defaultSegmentSize);
     }
 
     @Override
@@ -126,23 +138,7 @@ public class GHDirectory implements Directory {
             // per file name
             throw new IllegalStateException("DataAccess " + name + " has already been created");
 
-        DataAccess da;
-        if (type.isInMemory()) {
-            if (type.isInteg()) {
-                if (type.isStoring())
-                    da = new RAMIntDataAccess(name, location, true, segmentSize);
-                else
-                    da = new RAMIntDataAccess(name, location, false, segmentSize);
-            } else if (type.isStoring())
-                da = new RAMDataAccess(name, location, true, segmentSize);
-            else
-                da = new RAMDataAccess(name, location, false, segmentSize);
-        } else if (type.isMMap()) {
-            da = new MMapDataAccess(name, location, type.isAllowWrites(), segmentSize);
-        } else {
-            throw new IllegalArgumentException("DAType not supported " + type);
-        }
-
+        DataAccess da = type.create(name, location, segmentSize, getPreload(name), readOnly);
         map.put(name, da);
         return da;
     }
@@ -175,8 +171,8 @@ public class GHDirectory implements Directory {
     }
 
     private void removeBackingFile(DataAccess da, String name) {
-        if (da.getType().isStoring())
-            removeDir(new File(location + name));
+        // removeDir is a no-op if the file was never written (purely in-memory)
+        removeDir(new File(location + name));
     }
 
     @Override
@@ -190,19 +186,18 @@ public class GHDirectory implements Directory {
      */
     public DAType getDefaultType(String dataAccess, boolean preferInts) {
         DAType type = getDefault(dataAccess, typeFallback);
-        if (preferInts && type.isInMemory())
-            return type.isStoring() ? RAM_INT_STORE : RAM_INT;
+        if (preferInts && type.isOnHeap())
+            return RAM_INT;
         return type;
     }
 
-    public boolean isStoring() {
-        return typeFallback.isStoring();
-    }
-
-    @Override
-    public Directory create() {
-        if (isStoring())
-            new File(location).mkdirs();
+    /**
+     * Marks this Directory as read-only, e.g. for a read-only filesystem: the backing files of all
+     * DataAccess objects created afterwards must not be modified. Memory mapped types map them
+     * read-only (enforced by the OS), all other types throw on flush.
+     */
+    public GHDirectory setReadOnly(boolean readOnly) {
+        this.readOnly = readOnly;
         return this;
     }
 

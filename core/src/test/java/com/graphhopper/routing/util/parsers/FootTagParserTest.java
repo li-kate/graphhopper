@@ -24,7 +24,10 @@ import com.graphhopper.routing.util.AccessFilter;
 import com.graphhopper.routing.util.EncodingManager;
 import com.graphhopper.routing.util.PriorityCode;
 import com.graphhopper.storage.BaseGraph;
-import com.graphhopper.util.*;
+import com.graphhopper.util.EdgeExplorer;
+import com.graphhopper.util.EdgeIteratorState;
+import com.graphhopper.util.GHUtility;
+import com.graphhopper.util.PMap;
 import org.junit.jupiter.api.Test;
 
 import java.util.Collections;
@@ -53,10 +56,12 @@ public class FootTagParserTest {
             .add(FerrySpeed.create())
             .build();
     private final FootAccessParser accessParser = new FootAccessParser(encodingManager, new PMap());
+    private final FootAccessParser allowPrivateAccessParser = new FootAccessParser(encodingManager, new PMap());
     private final FootAverageSpeedParser speedParser = new FootAverageSpeedParser(encodingManager);
     private final FootPriorityParser prioParser = new FootPriorityParser(encodingManager);
 
     public FootTagParserTest() {
+        allowPrivateAccessParser.blockPrivate(false);
     }
 
     @Test
@@ -195,6 +200,25 @@ public class FootTagParserTest {
         way.setTag("access", "no");
         assertTrue(accessParser.getAccess(way).isWay());
 
+    }
+
+    @Test
+    public void testUnknownFootValueDoesNotShadowAccess() {
+        // an unrecognized foot value must defer to access, not shadow it
+        ReaderWay way = new ReaderWay(1);
+        way.setTag("highway", "service");
+        way.setTag("access", "no");
+        way.setTag("foot", "unknownvalue");
+        assertTrue(accessParser.getAccess(way).canSkip());
+
+        // but without any restriction it stays allowed
+        way.removeTag("access");
+        assertTrue(accessParser.getAccess(way).isWay());
+    }
+
+    @Test
+    public void testFerry() {
+        ReaderWay way = new ReaderWay(1);
         way.clearTags();
         way.setTag("route", "ferry");
         assertTrue(accessParser.getAccess(way).isFerry());
@@ -222,6 +246,31 @@ public class FootTagParserTest {
         way.setTag("foot", "designated");
         way.setTag("access", "private");
         assertTrue(accessParser.getAccess(way).canSkip());
+
+        way.clearTags();
+        way.setTag("route", "ferry");
+        EdgeIntAccess edgeIntAccess = ArrayEdgeIntAccess.createFromBytes(encodingManager.getBytesForFlags());
+        int edgeId = 0;
+        accessParser.handleWayTags(edgeId, edgeIntAccess, way);
+        assertTrue(footAccessEnc.getBool(false, edgeId, edgeIntAccess));
+        assertTrue(footAccessEnc.getBool(true, edgeId, edgeIntAccess));
+
+        // issue #1432
+        way.clearTags();
+        way.setTag("route", "ferry");
+        way.setTag("oneway", "yes");
+        edgeIntAccess = ArrayEdgeIntAccess.createFromBytes(encodingManager.getBytesForFlags());
+        accessParser.handleWayTags(edgeId, edgeIntAccess, way);
+        assertTrue(footAccessEnc.getBool(false, edgeId, edgeIntAccess));
+        assertFalse(footAccessEnc.getBool(true, edgeId, edgeIntAccess));
+
+        // speed for ferry is moved out of the encoded value, i.e. it is 0
+        way = new ReaderWay(0L);
+        way.setTag("route", "ferry");
+        assertTrue(accessParser.getAccess(way).isFerry());
+        edgeIntAccess = ArrayEdgeIntAccess.createFromBytes(encodingManager.getBytesForFlags());
+        accessParser.handleWayTags(edgeId, edgeIntAccess, way);
+        assertEquals(0, bikeAvgSpeedEnc.getDecimal(false, edgeId, edgeIntAccess));
     }
 
     @Test
@@ -319,68 +368,76 @@ public class FootTagParserTest {
     public void testPriority() {
         ReaderWay way = new ReaderWay(1);
         way.setTag("highway", "cycleway");
-        assertEquals(PriorityCode.UNCHANGED.getValue(), prioParser.handlePriority(way, null));
+        assertPriority(PriorityCode.UNCHANGED, way);
 
         way.setTag("highway", "primary");
-        assertEquals(PriorityCode.AVOID.getValue(), prioParser.handlePriority(way, null));
+        assertPriority(PriorityCode.AVOID, way);
 
         way.setTag("sidewalk", "yes");
-        assertEquals(PriorityCode.AVOID.getValue(), prioParser.handlePriority(way, null));
+        assertPriority(PriorityCode.AVOID, way);
 
         way.setTag("sidewalk", "no");
-        assertEquals(PriorityCode.BAD.getValue(), prioParser.handlePriority(way, null));
+        assertPriority(PriorityCode.BAD, way);
 
         way.clearTags();
         way.setTag("highway", "tertiary");
-        assertEquals(PriorityCode.UNCHANGED.getValue(), prioParser.handlePriority(way, null));
-        way.setTag("foot","use_sidepath");
-        assertEquals(PriorityCode.VERY_BAD.getValue(), prioParser.handlePriority(way, null));
+        assertPriority(PriorityCode.UNCHANGED, way);
 
         way.clearTags();
         way.setTag("highway", "tertiary");
         // tertiary without sidewalk is roughly like primary with sidewalk
         way.setTag("sidewalk", "no");
-        assertEquals(PriorityCode.AVOID.getValue(), prioParser.handlePriority(way, null));
+        assertPriority(PriorityCode.AVOID, way);
 
         way.setTag("highway", "track");
         way.setTag("bicycle", "official");
-        assertEquals(PriorityCode.SLIGHT_AVOID.getValue(), prioParser.handlePriority(way, null));
+        assertPriority(PriorityCode.SLIGHT_AVOID, way);
 
         way.setTag("highway", "track");
         way.setTag("bicycle", "designated");
-        assertEquals(PriorityCode.SLIGHT_AVOID.getValue(), prioParser.handlePriority(way, null));
+        assertPriority(PriorityCode.SLIGHT_AVOID, way);
 
         way.setTag("highway", "cycleway");
         way.setTag("bicycle", "designated");
         way.setTag("foot", "designated");
-        assertEquals(PriorityCode.PREFER.getValue(), prioParser.handlePriority(way, null));
+        assertPriority(PriorityCode.PREFER, way);
 
         way.clearTags();
         way.setTag("highway", "cycleway");
         way.setTag("sidewalk", "no");
-        assertEquals(PriorityCode.AVOID.getValue(), prioParser.handlePriority(way, null));
+        assertPriority(PriorityCode.AVOID, way);
 
         way.clearTags();
         way.setTag("highway", "road");
         way.setTag("bicycle", "official");
         way.setTag("sidewalk", "no");
-        assertEquals(PriorityCode.SLIGHT_AVOID.getValue(), prioParser.handlePriority(way, null));
+        assertPriority(PriorityCode.SLIGHT_AVOID, way);
 
         way.clearTags();
         way.setTag("highway", "secondary");
-        assertEquals(PriorityCode.AVOID.getValue(), prioParser.handlePriority(way, null));
+        assertPriority(PriorityCode.AVOID, way);
         way.setTag("highway", "trunk"); // secondary should be better to mostly avoid trunk e.g. here 46.9889,10.5664->47.0172,10.6059
-        assertEquals(PriorityCode.BAD.getValue(), prioParser.handlePriority(way, null));
+        assertPriority(PriorityCode.BAD, way);
 
         way.setTag("sidewalk", "no");
-        assertEquals(PriorityCode.REACH_DESTINATION.getValue(), prioParser.handlePriority(way, null));
+        assertPriority(PriorityCode.REACH_DESTINATION, way);
         way.setTag("sidewalk", "none");
-        assertEquals(PriorityCode.REACH_DESTINATION.getValue(), prioParser.handlePriority(way, null));
+        assertPriority(PriorityCode.REACH_DESTINATION, way);
+        way.removeTag("sidewalk");
+        way.setTag("sidewalk:left", "no");
+        way.setTag("sidewalk:right", "separate");
+        assertPriority(PriorityCode.REACH_DESTINATION, way);
 
         way.clearTags();
         way.setTag("highway", "residential");
         way.setTag("sidewalk", "yes");
-        assertEquals(PriorityCode.PREFER.getValue(), prioParser.handlePriority(way, null));
+        assertPriority(PriorityCode.PREFER, way);
+    }
+
+    void assertPriority(PriorityCode code, ReaderWay way) {
+        ArrayEdgeIntAccess access = new ArrayEdgeIntAccess(1);
+        prioParser.handleWayTags(0, access, way, null);
+        assertEquals(PriorityCode.getValue(code.getValue()), footPriorityEnc.getDecimal(false, 0, access), 0.01);
     }
 
     @Test
@@ -461,6 +518,30 @@ public class FootTagParserTest {
         node.setTag("barrier", "yes");
         node.setTag("access", "no");
         assertTrue(accessParser.isBarrier(node));
+
+        // test usage of xy_access|block_private=false
+        node.clearTags();
+        node.setTag("barrier", "gate");
+        assertFalse(allowPrivateAccessParser.isBarrier(node));
+        node.setTag("access", "private");
+        assertFalse(allowPrivateAccessParser.isBarrier(node));
+        node.setTag("locked", "yes");
+        assertTrue(allowPrivateAccessParser.isBarrier(node));
+
+        // Same test as before with other tag order
+        node.clearTags();
+        node.setTag("barrier", "gate");
+        node.setTag("locked", "yes");
+        assertTrue(allowPrivateAccessParser.isBarrier(node));
+        node.setTag("access", "private");
+        assertTrue(allowPrivateAccessParser.isBarrier(node));
+        node.setTag("access", "destination");
+        // See discussion in #3406. It is impossible to guess the intention for this combination.
+        // We block it because this simplifies the implementation logic.
+        // If someone wants to allow access for foot, they can add foot=yes.
+        assertTrue(allowPrivateAccessParser.isBarrier(node));
+        node.setTag("foot", "yes");
+        assertFalse(allowPrivateAccessParser.isBarrier(node));
     }
 
     @Test
@@ -471,31 +552,6 @@ public class FootTagParserTest {
         assertFalse(accessParser.isBarrier(node));
         node.setTag("foot", "no");
         assertTrue(accessParser.isBarrier(node));
-    }
-
-    @Test
-    public void testFord() {
-        // by default do not block access due to fords!
-        ReaderNode node = new ReaderNode(1, -1, -1);
-        node.setTag("ford", "no");
-        assertFalse(accessParser.isBarrier(node));
-
-        node = new ReaderNode(1, -1, -1);
-        node.setTag("ford", "yes");
-        assertFalse(accessParser.isBarrier(node));
-
-        // barrier!
-        node.setTag("foot", "no");
-        assertTrue(accessParser.isBarrier(node));
-
-        FootAccessParser blockFordsParser = new FootAccessParser(encodingManager, new PMap("block_fords=true"));
-        node = new ReaderNode(1, -1, -1);
-        node.setTag("ford", "no");
-        assertFalse(blockFordsParser.isBarrier(node));
-
-        node = new ReaderNode(1, -1, -1);
-        node.setTag("ford", "yes");
-        assertTrue(blockFordsParser.isBarrier(node));
     }
 
     @Test
@@ -548,6 +604,7 @@ public class FootTagParserTest {
         // note that this test made more sense when we used encoders that defined a max speed.
         assertEquals(16, speedEnc.getNextStorableValue(15));
     }
+
     @Test
     public void temporalAccess() {
         int edgeId = 0;

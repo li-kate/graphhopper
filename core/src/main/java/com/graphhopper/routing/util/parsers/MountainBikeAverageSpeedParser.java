@@ -7,38 +7,47 @@ public class MountainBikeAverageSpeedParser extends BikeCommonAverageSpeedParser
     public MountainBikeAverageSpeedParser(EncodedValueLookup lookup) {
         this(lookup.getDecimalEncodedValue(VehicleSpeed.key("mtb")),
                 lookup.getEnumEncodedValue(Smoothness.KEY, Smoothness.class),
-                lookup.getDecimalEncodedValue(FerrySpeed.KEY));
+                lookup.getEnumEncodedValue(BikeNetwork.KEY, RouteNetwork.class));
     }
 
-    protected MountainBikeAverageSpeedParser(DecimalEncodedValue speedEnc, EnumEncodedValue<Smoothness> smoothnessEnc, DecimalEncodedValue ferrySpeedEnc) {
-        super(speedEnc, smoothnessEnc, ferrySpeedEnc);
-        setTrackTypeSpeed("grade1", 18); // paved
+    protected MountainBikeAverageSpeedParser(DecimalEncodedValue speedEnc,
+                                             EnumEncodedValue<Smoothness> smoothnessEnc,
+                                             EnumEncodedValue<RouteNetwork> bikeRouteEnc) {
+        super(speedEnc, smoothnessEnc, bikeRouteEnc);
+        setTrackTypeSpeed("grade1", 20); // paved
         setTrackTypeSpeed("grade2", 16); // now unpaved ...
         setTrackTypeSpeed("grade3", 12);
         setTrackTypeSpeed("grade4", 8);
-        setTrackTypeSpeed("grade5", 6); // like sand/grass
+        setTrackTypeSpeed("grade5", PUSHING_SECTION_SPEED); // like sand
 
-        setSurfaceSpeed("concrete", 14);
-        setSurfaceSpeed("concrete:lanes", 16);
-        setSurfaceSpeed("concrete:plates", 16);
+        // +4km/h on certain surfaces (max 16km/h) due to wide MTB tires
         setSurfaceSpeed("dirt", 14);
         setSurfaceSpeed("earth", 14);
-        setSurfaceSpeed("fine_gravel", 18);
-        setSurfaceSpeed("grass", 14);
-        setSurfaceSpeed("grass_paver", 14);
-        setSurfaceSpeed("compacted", 16);
+        setSurfaceSpeed("ground", 14);
+        setSurfaceSpeed("fine_gravel", 16);
         setSurfaceSpeed("gravel", 16);
-        setSurfaceSpeed("ground", 16);
-        setSurfaceSpeed("ice", MIN_SPEED);
-        setSurfaceSpeed("metal", 10);
-        setSurfaceSpeed("mud", 12);
-        setSurfaceSpeed("salt", 12);
-        setSurfaceSpeed("sand", 10);
-        setSurfaceSpeed("wood", 10);
+        setSurfaceSpeed("pebblestone", 16);
+        setSurfaceSpeed("unhewn_cobblestone", 16);
+        setSurfaceSpeed("compacted", 16);
+        setSurfaceSpeed("woodchips", 16);
+        setSurfaceSpeed("grass", 12);
+        setSurfaceSpeed("grass_paver", 12);
 
-        setHighwaySpeed("path", 18);
-        setHighwaySpeed("footway", PUSHING_SECTION_SPEED);
-        setHighwaySpeed("track", 18);
-        setHighwaySpeed("residential", 16);
+        // 20km/h on paved roads matches the flat speed of a 160W cyclist on an mtb
+        setSurfaceSpeed("paved", 20);
+        setSurfaceSpeed("asphalt", 20);
+        setSurfaceSpeed("concrete", 20);
+        setSurfaceSpeed("chipseal", 20);
+        setHighwaySpeed("trunk", 20);
+        setHighwaySpeed("trunk_link", 20);
+        setHighwaySpeed("primary", 20);
+        setHighwaySpeed("primary_link", 20);
+        setHighwaySpeed("secondary", 20);
+        setHighwaySpeed("secondary_link", 20);
+        setHighwaySpeed("tertiary", 20);
+        setHighwaySpeed("tertiary_link", 20);
+        setHighwaySpeed("cycleway", 20);
+        setHighwaySpeed("residential", 20);
+        setHighwaySpeed("unclassified", 20);
     }
 }

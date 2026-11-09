@@ -8,7 +8,6 @@ import com.graphhopper.storage.IntsRef;
 
 import java.util.*;
 
-import static com.graphhopper.routing.ev.RouteNetwork.*;
 import static com.graphhopper.routing.util.PriorityCode.*;
 import static com.graphhopper.routing.util.parsers.AbstractAccessParser.INTENDED;
 
@@ -17,17 +16,12 @@ public class FootPriorityParser implements TagParser {
     final Map<String, PriorityCode> avoidHighwayTags = new HashMap<>();
     protected HashSet<String> sidewalksNoValues = new HashSet<>(5);
     protected final DecimalEncodedValue priorityWayEncoder;
-    protected EnumEncodedValue<RouteNetwork> footRouteEnc;
-    protected Map<RouteNetwork, Integer> routeMap = new HashMap<>();
 
     public FootPriorityParser(EncodedValueLookup lookup) {
-        this(lookup.getDecimalEncodedValue(VehiclePriority.key("foot")),
-                lookup.getEnumEncodedValue(FootNetwork.KEY, RouteNetwork.class)
-        );
+        this(lookup.getDecimalEncodedValue(VehiclePriority.key("foot")));
     }
 
-    protected FootPriorityParser(DecimalEncodedValue priorityEnc, EnumEncodedValue<RouteNetwork> footRouteEnc) {
-        this.footRouteEnc = footRouteEnc;
+    protected FootPriorityParser(DecimalEncodedValue priorityEnc) {
         priorityWayEncoder = priorityEnc;
 
         sidewalksNoValues.add("no");
@@ -55,36 +49,30 @@ public class FootPriorityParser implements TagParser {
         avoidHighwayTags.put("secondary_link", BAD);
         avoidHighwayTags.put("tertiary", AVOID);
         avoidHighwayTags.put("tertiary_link", AVOID);
-
-        routeMap.put(INTERNATIONAL, UNCHANGED.getValue());
-        routeMap.put(NATIONAL, UNCHANGED.getValue());
-        routeMap.put(REGIONAL, UNCHANGED.getValue());
-        routeMap.put(LOCAL, UNCHANGED.getValue());
     }
 
     @Override
     public void handleWayTags(int edgeId, EdgeIntAccess edgeIntAccess, ReaderWay way, IntsRef relationFlags) {
         String highwayValue = way.getTag("highway");
-        Integer priorityFromRelation = routeMap.get(footRouteEnc.getEnum(false, edgeId, edgeIntAccess));
-        if (highwayValue == null) {
-            if (FerrySpeedCalculator.isFerry(way))
-                priorityWayEncoder.setDecimal(false, edgeId, edgeIntAccess, PriorityCode.getValue(handlePriority(way, priorityFromRelation)));
-        } else {
-            priorityWayEncoder.setDecimal(false, edgeId, edgeIntAccess, PriorityCode.getValue(handlePriority(way, priorityFromRelation)));
-        }
-    }
-
-    public int handlePriority(ReaderWay way, Integer priorityFromRelation) {
         TreeMap<Double, PriorityCode> weightToPrioMap = new TreeMap<>();
-        if (priorityFromRelation == null)
-            weightToPrioMap.put(0d, UNCHANGED);
-        else
-            weightToPrioMap.put(110d, PriorityCode.valueOf(priorityFromRelation));
-
+        weightToPrioMap.put(0d, UNCHANGED);
         collect(way, weightToPrioMap);
 
         // pick priority with the biggest order value
-        return weightToPrioMap.lastEntry().getValue().getValue();
+        double priority = PriorityCode.getValue(weightToPrioMap.lastEntry().getValue().getValue());
+
+        if (highwayValue == null) {
+            if (FerrySpeedCalculator.isFerry(way))
+                priorityWayEncoder.setDecimal(false, edgeId, edgeIntAccess, priority);
+        } else {
+            priorityWayEncoder.setDecimal(false, edgeId, edgeIntAccess, priority);
+        }
+    }
+
+    // like USE_SIDEPATH in OSMRoadAccessParser.forFoot also the directional keys count
+    boolean noSidewalk(ReaderWay way) {
+        return way.hasTag("sidewalk", sidewalksNoValues) || way.hasTag("sidewalk:both", sidewalksNoValues)
+                || way.hasTag("sidewalk:left", sidewalksNoValues) && way.hasTag("sidewalk:right", sidewalksNoValues);
     }
 
     /**
@@ -96,26 +84,28 @@ public class FootPriorityParser implements TagParser {
         if (way.hasTag("foot", "designated"))
             weightToPrioMap.put(100d, PREFER);
 
-        if (way.hasTag("foot", "use_sidepath")) {
-            weightToPrioMap.put(100d, VERY_BAD); // see #3035
-        }
-
         double maxSpeed = Math.max(OSMMaxSpeedParser.parseMaxSpeed(way, false), OSMMaxSpeedParser.parseMaxSpeed(way, true));
-        if (safeHighwayTags.contains(highway) || (maxSpeed != MaxSpeed.MAXSPEED_MISSING && maxSpeed <= 20)) {
+        if (safeHighwayTags.contains(highway) || maxSpeed <= 20) {
             weightToPrioMap.put(40d, PREFER);
             if (way.hasTag("tunnel", INTENDED)) {
-                if (way.hasTag("sidewalk", sidewalksNoValues))
+                if (noSidewalk(way))
                     weightToPrioMap.put(40d, AVOID);
                 else
                     weightToPrioMap.put(40d, UNCHANGED);
             }
         } else if ((maxSpeed != MaxSpeed.MAXSPEED_MISSING && maxSpeed > 50) || avoidHighwayTags.containsKey(highway)) {
             PriorityCode priorityCode = avoidHighwayTags.get(highway);
-            if (way.hasTag("sidewalk", sidewalksNoValues))
+            if (noSidewalk(way))
                 weightToPrioMap.put(40d, priorityCode == null ? BAD : priorityCode);
+            else if (priorityCode == null)
+                weightToPrioMap.put(40d, AVOID);
             else
-                weightToPrioMap.put(40d, priorityCode == null ? AVOID : priorityCode.better().better());
-        } else if (way.hasTag("sidewalk", sidewalksNoValues))
+                weightToPrioMap.put(40d, switch (priorityCode) { // two steps on the old coarse scale
+                    case REACH_DESTINATION -> BAD;
+                    case BAD -> AVOID;
+                    default -> UNCHANGED;
+                });
+        } else if (noSidewalk(way))
             weightToPrioMap.put(40d, AVOID);
 
         if (way.hasTag("bicycle", "official") || way.hasTag("bicycle", "designated"))

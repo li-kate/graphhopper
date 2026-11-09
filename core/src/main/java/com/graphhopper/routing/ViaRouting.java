@@ -23,21 +23,21 @@ import com.graphhopper.routing.ev.EnumEncodedValue;
 import com.graphhopper.routing.ev.RoadClass;
 import com.graphhopper.routing.ev.RoadEnvironment;
 import com.graphhopper.routing.querygraph.QueryGraph;
-import com.graphhopper.routing.querygraph.VirtualEdgeIteratorState;
 import com.graphhopper.routing.util.*;
 import com.graphhopper.storage.index.LocationIndex;
 import com.graphhopper.storage.index.Snap;
 import com.graphhopper.util.EdgeIterator;
-import com.graphhopper.util.EdgeIteratorState;
 import com.graphhopper.util.Helper;
 import com.graphhopper.util.shapes.GHPoint;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Function;
 
 import static com.graphhopper.util.EdgeIterator.ANY_EDGE;
 import static com.graphhopper.util.EdgeIterator.NO_EDGE;
 import static com.graphhopper.util.Parameters.Curbsides.CURBSIDE_ANY;
+import static com.graphhopper.util.Parameters.Curbsides.CURBSIDE_AUTO;
 import static com.graphhopper.util.Parameters.Routing.CURBSIDE;
 
 /**
@@ -96,11 +96,13 @@ public class ViaRouting {
 
     public static Result calcPaths(List<GHPoint> points, QueryGraph queryGraph, List<Snap> snaps,
                                    DirectedEdgeFilter directedEdgeFilter, PathCalculator pathCalculator,
-                                   List<String> curbsides, String curbsideStrictness, List<Double> headings, boolean passThrough) {
+                                   List<String> curbsides, String curbsideStrictness, List<Double> headings, boolean passThrough, EncodingManager em) {
         if (!curbsides.isEmpty() && curbsides.size() != points.size())
             throw new IllegalArgumentException("If you pass " + CURBSIDE + ", you need to pass exactly one curbside for every point, empty curbsides will be ignored");
         if (!curbsides.isEmpty() && !headings.isEmpty())
             throw new IllegalArgumentException("You cannot use curbsides and headings or pass_through at the same time");
+
+        Function<Snap, String> curbsideAutoFunction = CurbsideAutoHelper.createResolver(directedEdgeFilter, em);
 
         final int legs = snaps.size() - 1;
         Result result = new Result(legs);
@@ -126,8 +128,13 @@ public class ViaRouting {
             }
 
             // enforce curbsides
-            final String fromCurbside = curbsides.isEmpty() ? CURBSIDE_ANY : curbsides.get(leg);
-            final String toCurbside = curbsides.isEmpty() ? CURBSIDE_ANY : curbsides.get(leg + 1);
+            String fromCurbside = curbsides.isEmpty() ? CURBSIDE_ANY : curbsides.get(leg);
+            String toCurbside = curbsides.isEmpty() ? CURBSIDE_ANY : curbsides.get(leg + 1);
+
+            if (CURBSIDE_AUTO.equals(fromCurbside))
+                fromCurbside = curbsideAutoFunction.apply(fromSnap);
+            if (CURBSIDE_AUTO.equals(toCurbside))
+                toCurbside = curbsideAutoFunction.apply(toSnap);
 
             EdgeRestrictions edgeRestrictions = buildEdgeRestrictions(queryGraph, fromSnap, toSnap,
                     fromHeading, toHeading, incomingEdge, passThrough,
@@ -181,20 +188,11 @@ public class ViaRouting {
     private static EdgeRestrictions buildEdgeRestrictions(
             QueryGraph queryGraph, Snap fromSnap, Snap toSnap,
             double fromHeading, double toHeading, int incomingEdge, boolean passThrough,
-            String fromCurbside, String toCurbside, DirectedEdgeFilter edgeFilter) {
+            String fromCurbside, String toCurbside, DirectedEdgeFilter directedEdgeFilter) {
         EdgeRestrictions edgeRestrictions = new EdgeRestrictions();
 
         // curbsides
         if (!fromCurbside.equals(CURBSIDE_ANY) || !toCurbside.equals(CURBSIDE_ANY)) {
-            DirectedEdgeFilter directedEdgeFilter = (edge, reverse) -> {
-                // todo: maybe find a cleaner way to obtain the original edge given a VirtualEdgeIterator (not VirtualEdgeIteratorState)
-                if (queryGraph.isVirtualEdge(edge.getEdge())) {
-                    EdgeIteratorState virtualEdge = queryGraph.getEdgeIteratorStateForKey(edge.getEdgeKey());
-                    EdgeIteratorState origEdge = queryGraph.getEdgeIteratorStateForKey(((VirtualEdgeIteratorState) virtualEdge).getOriginalEdgeKey());
-                    return edgeFilter.accept(origEdge, reverse);
-                } else
-                    return edgeFilter.accept(edge, reverse);
-            };
             DirectionResolver directionResolver = new DirectionResolver(queryGraph, directedEdgeFilter);
             DirectionResolverResult fromDirection = directionResolver.resolveDirections(fromSnap.getClosestNode(), fromSnap.getQueryPoint());
             DirectionResolverResult toDirection = directionResolver.resolveDirections(toSnap.getClosestNode(), toSnap.getQueryPoint());
@@ -260,5 +258,4 @@ public class ViaRouting {
     private static int throwImpossibleCurbsideConstraint(List<String> curbsides, int placeIndex) {
         throw new IllegalArgumentException("Impossible curbside constraint: 'curbside=" + curbsides.get(placeIndex) + "' at point " + placeIndex);
     }
-
 }

@@ -30,6 +30,7 @@ public class HikeCustomModelTest {
                 add(VehicleSpeed.create("foot", 4, 1, false)).
                 add(VehiclePriority.create("foot", 4, PriorityCode.getFactor(1), false)).
                 add(FerrySpeed.create()).
+                add(RoadEnvironment.create()).
                 add(RouteNetwork.create(FootNetwork.KEY)).
                 add(FootRoadAccess.create()).
                 add(hikeRating).build();
@@ -55,7 +56,7 @@ public class HikeCustomModelTest {
         ReaderWay way = new ReaderWay(0L);
         way.setTag("highway", "track");
         EdgeIteratorState edge = createEdge(way);
-        CustomWeighting.Parameters p = CustomModelParser.createWeightingParameters(cm, em);
+        CustomWeighting.Config p = CustomModelParser.createWeightingConfig(cm, em);
         assertEquals(1.2, p.getEdgeToPriorityMapping().get(edge, false), 0.01);
 
         way.setTag("motor_vehicle", "private");

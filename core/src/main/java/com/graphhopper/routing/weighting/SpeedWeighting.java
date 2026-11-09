@@ -35,23 +35,7 @@ public class SpeedWeighting implements Weighting {
         if (turnCostStorage == null || turnCostEnc == null)
             throw new IllegalArgumentException("This SpeedWeighting constructor expects turnCostEnc and turnCostStorage to be != null");
         if (uTurnCosts < 0) throw new IllegalArgumentException("u-turn costs must be positive");
-        this.speedEnc = speedEnc;
-        this.turnCostProvider = new TurnCostProvider() {
-            @Override
-            public double calcTurnWeight(int inEdge, int viaNode, int outEdge) {
-                if (!EdgeIterator.Edge.isValid(inEdge) || !EdgeIterator.Edge.isValid(outEdge))
-                    return 0;
-                if (inEdge == outEdge)
-                    return Math.max(turnCostStorage.get(turnCostEnc, inEdge, viaNode, outEdge), uTurnCosts);
-                else
-                    return turnCostStorage.get(turnCostEnc, inEdge, viaNode, outEdge);
-            }
-
-            @Override
-            public long calcTurnMillis(int inEdge, int viaNode, int outEdge) {
-                return (long) (1000 * calcTurnWeight(inEdge, viaNode, outEdge));
-            }
-        };
+        this(speedEnc, new SpeedWeightingTurnCostProvider(turnCostStorage, turnCostEnc, uTurnCosts));
     }
 
     public SpeedWeighting(DecimalEncodedValue speedEnc, TurnCostProvider turnCostProvider) {
@@ -61,24 +45,27 @@ public class SpeedWeighting implements Weighting {
 
     @Override
     public double calcMinWeightPerDistance() {
-        return 1 / speedEnc.getMaxStorableDecimal();
+        return 10.0 / speedEnc.getMaxStorableDecimal();
     }
 
     @Override
     public double calcEdgeWeight(EdgeIteratorState edgeState, boolean reverse) {
         double speed = reverse ? edgeState.getReverse(speedEnc) : edgeState.get(speedEnc);
         if (speed == 0) return Double.POSITIVE_INFINITY;
-        return edgeState.getDistance() / speed;
+        return Weighting.roundWeight(10 * edgeState.getDistance() / speed);
     }
 
     @Override
     public long calcEdgeMillis(EdgeIteratorState edgeState, boolean reverse) {
-        return (long) (1000 * calcEdgeWeight(edgeState, reverse));
+        double speed = reverse ? edgeState.getReverse(speedEnc) : edgeState.get(speedEnc);
+        if (speed == 0) return Long.MAX_VALUE;
+        return (long) (1000 * (edgeState.getDistance() / speed));
     }
 
     @Override
     public double calcTurnWeight(int inEdge, int viaNode, int outEdge) {
-        return turnCostProvider.calcTurnWeight(inEdge, viaNode, outEdge);
+        double turnWeight = turnCostProvider.calcTurnWeight(inEdge, viaNode, outEdge);
+        return Weighting.roundWeight(10 * turnWeight);
     }
 
     @Override
@@ -92,7 +79,39 @@ public class SpeedWeighting implements Weighting {
     }
 
     @Override
+    public String toString() {
+        return getName();
+    }
+
+    @Override
     public String getName() {
         return "speed";
+    }
+
+    public static class SpeedWeightingTurnCostProvider implements TurnCostProvider {
+        private final TurnCostStorage turnCostStorage;
+        private final DecimalEncodedValue turnCostEnc;
+        private final double uTurnCosts;
+
+        public SpeedWeightingTurnCostProvider(TurnCostStorage turnCostStorage, DecimalEncodedValue turnCostEnc, double uTurnCosts) {
+            this.turnCostStorage = turnCostStorage;
+            this.turnCostEnc = turnCostEnc;
+            this.uTurnCosts = uTurnCosts;
+        }
+
+        @Override
+        public double calcTurnWeight(int inEdge, int viaNode, int outEdge) {
+            if (!EdgeIterator.Edge.isValid(inEdge) || !EdgeIterator.Edge.isValid(outEdge))
+                return 0;
+            if (inEdge == outEdge)
+                return Math.max(turnCostStorage.get(turnCostEnc, inEdge, viaNode, outEdge), uTurnCosts);
+            else
+                return turnCostStorage.get(turnCostEnc, inEdge, viaNode, outEdge);
+        }
+
+        @Override
+        public long calcTurnMillis(int inEdge, int viaNode, int outEdge) {
+            return (long) (1000 * calcTurnWeight(inEdge, viaNode, outEdge));
+        }
     }
 }

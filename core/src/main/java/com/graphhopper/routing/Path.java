@@ -43,7 +43,7 @@ public class Path {
     final Graph graph;
     private final NodeAccess nodeAccess;
     private double weight = Double.MAX_VALUE;
-    private double distance;
+    private long distance_mm;
     private long time;
     private IntArrayList edgeIds = new IntArrayList();
     private int fromNode = -1;
@@ -125,13 +125,8 @@ public class Path {
         return this;
     }
 
-    public Path setDistance(double distance) {
-        this.distance = distance;
-        return this;
-    }
-
-    public Path addDistance(double distance) {
-        this.distance += distance;
+    public Path addDistance_mm(long distance_mm) {
+        this.distance_mm += distance_mm;
         return this;
     }
 
@@ -139,7 +134,11 @@ public class Path {
      * @return distance in meter
      */
     public double getDistance() {
-        return distance;
+        return distance_mm / 1000.0;
+    }
+
+    public long getDistance_mm() {
+        return distance_mm;
     }
 
     /**
@@ -222,17 +221,7 @@ public class Path {
         if (edgeIds.isEmpty())
             return edges;
 
-        forEveryEdge(new EdgeVisitor() {
-            @Override
-            public void next(EdgeIteratorState eb, int index, int prevEdgeId) {
-                edges.add(eb);
-            }
-
-            @Override
-            public void finish() {
-
-            }
-        });
+        forEveryEdge((eb, index, prevEdgeId) -> edges.add(eb));
         return edges;
     }
 
@@ -250,17 +239,7 @@ public class Path {
 
         int tmpNode = getFromNode();
         nodes.add(tmpNode);
-        forEveryEdge(new EdgeVisitor() {
-            @Override
-            public void next(EdgeIteratorState eb, int index, int prevEdgeId) {
-                nodes.add(eb.getAdjNode());
-            }
-
-            @Override
-            public void finish() {
-
-            }
-        });
+        forEveryEdge((eb, index, prevEdgeId) -> nodes.add(eb.getAdjNode()));
         return nodes;
     }
 
@@ -281,18 +260,10 @@ public class Path {
 
         int tmpNode = getFromNode();
         points.add(nodeAccess, tmpNode);
-        forEveryEdge(new EdgeVisitor() {
-            @Override
-            public void next(EdgeIteratorState eb, int index, int prevEdgeId) {
-                PointList pl = eb.fetchWayGeometry(FetchMode.PILLAR_AND_ADJ);
-                for (int j = 0; j < pl.size(); j++) {
-                    points.add(pl, j);
-                }
-            }
-
-            @Override
-            public void finish() {
-
+        forEveryEdge((eb, index, prevEdgeId) -> {
+            PointList pl = eb.fetchWayGeometry(FetchMode.PILLAR_AND_ADJ);
+            for (int j = 0; j < pl.size(); j++) {
+                points.add(pl, j);
             }
         });
         return points;
@@ -300,7 +271,7 @@ public class Path {
 
     @Override
     public String toString() {
-        return "found: " + found + ", weight: " + weight + ", time: " + time + ", distance: " + distance + ", edges: " + edgeIds.size();
+        return "found: " + found + ", weight: " + weight + ", time: " + time + ", distance: " + distance_mm + ", edges: " + edgeIds.size();
     }
 
     /**
@@ -309,6 +280,7 @@ public class Path {
     public interface EdgeVisitor {
         void next(EdgeIteratorState edge, int index, int prevEdgeId);
 
-        void finish();
+        default void finish() {
+        }
     }
 }

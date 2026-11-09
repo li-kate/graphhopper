@@ -17,18 +17,17 @@
  */
 package com.graphhopper.routing.ev;
 
-import com.graphhopper.reader.ReaderWay;
-import com.graphhopper.routing.util.TransportationMode;
-import com.graphhopper.routing.util.countryrules.CountryRule;
 import com.graphhopper.util.Helper;
 
 /**
  * This enum defines the road access of an edge. Most edges are accessible from everyone and so the
  * default value is YES. But some have restrictions like "accessible only for customers" or when
- * delivering. The NO value does not permit any access.
+ * delivering. The NO value does not permit any access. The values are ordered from least to most
+ * restrictive, which is used to resolve conditional tags. Only YES has to stay the first value, as
+ * it is the default for edges without an access tag.
  */
 public enum RoadAccess {
-    YES, DESTINATION, CUSTOMERS, DELIVERY, PRIVATE, AGRICULTURAL, FORESTRY, NO;
+    YES, DESIGNATED, DISCOURAGED, DESTINATION, CUSTOMERS, DELIVERY, PRIVATE, MILITARY, AGRICULTURAL, FORESTRY, NO;
 
     public static final String KEY = "road_access";
 
@@ -44,7 +43,7 @@ public enum RoadAccess {
     public static RoadAccess find(String name) {
         if (name == null)
             return YES;
-        if (name.equalsIgnoreCase("permit"))
+        if (name.equalsIgnoreCase("permit") || name.equalsIgnoreCase("service"))
             return PRIVATE;
         try {
             // public and permissive will be converted into "yes"
@@ -52,10 +51,5 @@ public enum RoadAccess {
         } catch (IllegalArgumentException ex) {
             return YES;
         }
-    }
-
-    public static RoadAccess countryHook(ReaderWay readerWay, RoadAccess roadAccess) {
-        CountryRule countryRule = readerWay.getTag("country_rule", null);
-        return countryRule == null ? roadAccess : countryRule.getAccess(readerWay, TransportationMode.CAR, roadAccess == null ? RoadAccess.YES : roadAccess);
     }
 }

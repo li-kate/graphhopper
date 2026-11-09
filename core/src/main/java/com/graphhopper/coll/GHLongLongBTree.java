@@ -22,6 +22,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Arrays;
+import java.util.function.LongUnaryOperator;
 
 /**
  * An in-memory B-Tree with configurable value size (1-8 bytes). Delete not supported.
@@ -71,31 +72,6 @@ public class GHLongLongBTree implements LongLongMap {
         clear();
     }
 
-    static int binarySearch(long[] keys, int start, int len, long key) {
-        int high = start + len, low = start - 1, guess;
-        while (high - low > 1) {
-            // use >>> for average or we could get an integer overflow.
-            guess = (high + low) >>> 1;
-            long guessedKey = keys[guess];
-            if (guessedKey < key) {
-                low = guess;
-            } else {
-                high = guess;
-            }
-        }
-
-        if (high == start + len) {
-            return ~(start + len);
-        }
-
-        long highKey = keys[high];
-        if (highKey == key) {
-            return high;
-        } else {
-            return ~high;
-        }
-    }
-
     @Override
     public long put(long key, long value) {
         if (value > maxValue)
@@ -111,6 +87,28 @@ public class GHLongLongBTree implements LongLongMap {
         }
         if (rv.oldValue == null) {
             // successfully inserted
+            size++;
+            if (size % 1000000 == 0)
+                optimize();
+        }
+        return rv.oldValue == null ? emptyValue : toLong(rv.oldValue);
+    }
+
+    @Override
+    public long putOrCompute(long key, long valueIfAbsent, LongUnaryOperator computeIfPresent) {
+        if (valueIfAbsent > maxValue)
+            throw new IllegalArgumentException("Value " + valueIfAbsent + " exceeded max value: " + maxValue
+                    + ". Increase bytesPerValue (" + bytesPerValue + ")");
+        if (valueIfAbsent == emptyValue)
+            throw new IllegalArgumentException("Value cannot be the 'empty value' " + emptyValue);
+
+        ReturnValue rv = root.putOrCompute(key, valueIfAbsent, computeIfPresent);
+        if (rv.tree != null) {
+            height++;
+            root = rv.tree;
+        }
+        if (rv.oldValue == null) {
+            // successfully inserted (was absent)
             size++;
             if (size % 1000000 == 0)
                 optimize();
@@ -256,11 +254,10 @@ public class GHLongLongBTree implements LongLongMap {
         }
 
         /**
-         * @return the old value which was associated with the specified key or if no update it
-         * returns noNumberValue
+         * @return the old value which was associated with the specified key or null if no update.
          */
         ReturnValue put(long key, long newValue) {
-            int index = binarySearch(keys, 0, entrySize, key);
+            int index = Arrays.binarySearch(keys, 0, entrySize, key);
             if (index >= 0) {
                 // update
                 byte[] oldValue = new byte[bytesPerValue];
@@ -287,6 +284,64 @@ public class GHLongLongBTree implements LongLongMap {
             }
 
             downTreeRV = children[index].put(key, newValue);
+            if (downTreeRV.oldValue != null) // only update
+                return downTreeRV;
+
+            if (downTreeRV.tree != null) {
+                // split this treeEntry if it is too big
+                BTreeEntry returnTree, downTree = returnTree = checkSplitEntry();
+                if (downTree == null) {
+                    insertTree(index, downTreeRV.tree);
+                } else if (index <= splitIndex) {
+                    downTree.children[0].insertTree(index, downTreeRV.tree);
+                } else {
+                    downTree.children[1].insertTree(index - splitIndex - 1, downTreeRV.tree);
+                }
+
+                downTreeRV.tree = returnTree;
+            }
+            return downTreeRV;
+        }
+
+        /**
+         * Like put, but uses valueIfAbsent when key is not found, and computeIfPresent when key is found.
+         * This avoids a separate get+put traversal.
+         */
+        ReturnValue putOrCompute(long key, long valueIfAbsent, LongUnaryOperator computeIfPresent) {
+            int index = Arrays.binarySearch(keys, 0, entrySize, key);
+            if (index >= 0) {
+                // key exists: compute new value from old value
+                byte[] oldValue = new byte[bytesPerValue];
+                System.arraycopy(values, index * bytesPerValue, oldValue, 0, bytesPerValue);
+                long oldLong = toLong(oldValue);
+                long newValue = computeIfPresent.applyAsLong(oldLong);
+                if (newValue > maxValue)
+                    throw new IllegalArgumentException("Computed value " + newValue + " exceeded max value: " + maxValue
+                            + ". Increase bytesPerValue (" + bytesPerValue + ")");
+                if (newValue == emptyValue)
+                    throw new IllegalArgumentException("Computed value cannot be the 'empty value' " + emptyValue);
+                fromLong(values, newValue, index * bytesPerValue);
+                return new ReturnValue(oldValue);
+            }
+
+            // key does not exist: insert valueIfAbsent
+            index = ~index;
+            ReturnValue downTreeRV;
+            if (isLeaf || children[index] == null) {
+                // insert
+                downTreeRV = new ReturnValue(null);
+                downTreeRV.tree = checkSplitEntry();
+                if (downTreeRV.tree == null) {
+                    insertKeyValue(index, key, fromLong(valueIfAbsent));
+                } else if (index <= splitIndex) {
+                    downTreeRV.tree.children[0].insertKeyValue(index, key, fromLong(valueIfAbsent));
+                } else {
+                    downTreeRV.tree.children[1].insertKeyValue(index - splitIndex - 1, key, fromLong(valueIfAbsent));
+                }
+                return downTreeRV;
+            }
+
+            downTreeRV = children[index].putOrCompute(key, valueIfAbsent, computeIfPresent);
             if (downTreeRV.oldValue != null) // only update
                 return downTreeRV;
 
@@ -373,7 +428,7 @@ public class GHLongLongBTree implements LongLongMap {
         }
 
         long get(long key) {
-            int index = binarySearch(keys, 0, entrySize, key);
+            int index = Arrays.binarySearch(keys, 0, entrySize, key);
             if (index >= 0) {
                 return toLong(values, index * bytesPerValue);
             }

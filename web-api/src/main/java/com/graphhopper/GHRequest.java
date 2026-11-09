@@ -28,6 +28,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.stream.Collectors;
 
 /**
  * Request object to perform routing with GraphHopper.
@@ -42,6 +43,7 @@ public class GHRequest {
     private List<Double> headings = new ArrayList<>();
     private List<String> pointHints = new ArrayList<>();
     private List<String> curbsides = new ArrayList<>();
+    private List<Integer> announcedViaPoints;
     private List<String> snapPreventions;
     private List<String> pathDetails = new ArrayList<>();
     private String algo = "";
@@ -106,13 +108,15 @@ public class GHRequest {
     /**
      * Sets the headings, i.e. the direction the route should leave the starting point and the directions the route
      * should arrive from at the via-points and the end point. Each heading is given as north based azimuth (clockwise)
-     * in [0, 360) or NaN if no direction shall be specified.
+     * in [0, 360) or NaN or null if no direction shall be specified.
      * <p>
      * The number of headings must be zero (default), one (for the start point) or equal to the number of points
      * when sending the request.
      */
     public GHRequest setHeadings(List<Double> headings) {
-        this.headings = headings;
+        this.headings = headings.stream()
+                .map(d -> d == null ? Double.NaN : d)
+                .collect(Collectors.toList());
         return this;
     }
 
@@ -203,6 +207,18 @@ public class GHRequest {
 
     public List<String> getCurbsides() {
         return curbsides;
+    }
+
+    /**
+     * @param announcedViaPoints the indices of the via points that get instructions, null means all. Start and end are accepted and ignored.
+     */
+    public GHRequest setAnnouncedViaPoints(List<Integer> announcedViaPoints) {
+        this.announcedViaPoints = announcedViaPoints;
+        return this;
+    }
+
+    public List<Integer> getAnnouncedViaPoints() {
+        return announcedViaPoints;
     }
 
     public boolean hasSnapPreventions() {

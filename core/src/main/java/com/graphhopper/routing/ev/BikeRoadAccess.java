@@ -20,7 +20,7 @@ package com.graphhopper.routing.ev;
 import com.graphhopper.util.Helper;
 
 public enum BikeRoadAccess {
-    MISSING, YES, DISMOUNT, DESIGNATED, DESTINATION, PRIVATE, USE_SIDEPATH, NO;
+    MISSING, YES, DESIGNATED, DISMOUNT, DESTINATION, PRIVATE, MILITARY, USE_SIDEPATH, NO;
 
     public static final String KEY = "bike_road_access";
 
@@ -38,6 +38,8 @@ public enum BikeRoadAccess {
             return MISSING;
         if (name.equalsIgnoreCase("permit") || name.equalsIgnoreCase("customers"))
             return PRIVATE;
+        if (name.equalsIgnoreCase("forestry") || name.equalsIgnoreCase("agricultural"))
+            return DISMOUNT;
         try {
             return BikeRoadAccess.valueOf(Helper.toUpperCase(name));
         } catch (IllegalArgumentException ex) {

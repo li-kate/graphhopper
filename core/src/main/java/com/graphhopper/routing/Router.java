@@ -24,9 +24,7 @@ import com.graphhopper.GHResponse;
 import com.graphhopper.ResponsePath;
 import com.graphhopper.config.Profile;
 import com.graphhopper.routing.ch.CHRoutingAlgorithmFactory;
-import com.graphhopper.routing.ev.BooleanEncodedValue;
-import com.graphhopper.routing.ev.EncodedValueLookup;
-import com.graphhopper.routing.ev.Subnetwork;
+import com.graphhopper.routing.ev.*;
 import com.graphhopper.routing.lm.LMRoutingAlgorithmFactory;
 import com.graphhopper.routing.lm.LandmarkStorage;
 import com.graphhopper.routing.querygraph.QueryGraph;
@@ -66,8 +64,6 @@ public class Router {
     protected final WeightingFactory weightingFactory;
     protected final Map<String, RoutingCHGraph> chGraphs;
     protected final Map<String, LandmarkStorage> landmarks;
-    protected final boolean chEnabled;
-    protected final boolean lmEnabled;
 
     public Router(BaseGraph graph, EncodingManager encodingManager, LocationIndex locationIndex,
                   Map<String, Profile> profilesByName, PathDetailsBuilderFactory pathDetailsBuilderFactory,
@@ -83,10 +79,6 @@ public class Router {
         this.weightingFactory = weightingFactory;
         this.chGraphs = chGraphs;
         this.landmarks = landmarks;
-        // note that his is not the same as !ghStorage.getCHConfigs().isEmpty(), because the GHStorage might have some
-        // CHGraphs that were not built yet (and possibly no CH profiles were configured).
-        this.chEnabled = !chGraphs.isEmpty();
-        this.lmEnabled = !landmarks.isEmpty();
 
         for (String profile : profilesByName.keySet()) {
             if (!encodingManager.hasEncodedValue(Subnetwork.key(profile)))
@@ -102,6 +94,7 @@ public class Router {
             checkHeadings(request);
             checkPointHints(request);
             checkCurbsides(request);
+            checkAnnouncedViaPoints(request);
             checkNoBlockArea(request);
             checkCustomModel(request);
 
@@ -177,6 +170,19 @@ public class Router {
             throw new IllegalArgumentException("If you pass " + CURBSIDE + ", you need to pass exactly one curbside for every point, empty curbsides will be ignored");
     }
 
+    private void checkAnnouncedViaPoints(GHRequest request) {
+        List<Integer> viaPoints = request.getAnnouncedViaPoints();
+        if (viaPoints == null)
+            return;
+        int maxIndex = request.getPoints().size() - 1;
+        for (int i = 0; i < viaPoints.size(); i++) {
+            if (viaPoints.get(i) < 0 || viaPoints.get(i) > maxIndex)
+                throw new IllegalArgumentException(ANNOUNCED_VIA_POINTS + " must contain point indices from 0 to " + maxIndex + ", but was: " + viaPoints);
+            if (i > 0 && viaPoints.get(i) <= viaPoints.get(i - 1))
+                throw new IllegalArgumentException(ANNOUNCED_VIA_POINTS + " must be strictly increasing, but was: " + viaPoints);
+        }
+    }
+
     private void checkNoBlockArea(GHRequest request) {
         if (request.getHints().has("block_area"))
             throw new IllegalArgumentException("The `block_area` parameter is no longer supported. Use a custom model with `areas` instead.");
@@ -188,11 +194,9 @@ public class Router {
     }
 
     protected Solver createSolver(GHRequest request) {
-        final boolean disableCH = getDisableCH(request.getHints());
-        final boolean disableLM = getDisableLM(request.getHints());
-        if (chEnabled && !disableCH) {
+        if (chGraphs.containsKey(request.getProfile()) && !getDisableCH(request.getHints())) {
             return createCHSolver(request, profilesByName, routerConfig, encodingManager, chGraphs);
-        } else if (lmEnabled && !disableLM) {
+        } else if (landmarks.containsKey(request.getProfile()) && !getDisableLM(request.getHints())) {
             return createLMSolver(request, profilesByName, routerConfig, encodingManager, weightingFactory, graph, locationIndex, landmarks);
         } else {
             return createFlexSolver(request, profilesByName, routerConfig, encodingManager, weightingFactory, graph, locationIndex);
@@ -231,7 +235,7 @@ public class Router {
         // we merge the different legs of the roundtrip into one response path
         // note that the waypoints are not just the snapped points of the snaps, as usual, because we do some kind of tweak
         // to avoid 'unnecessary tails' in the roundtrip algo
-        ResponsePath responsePath = concatenatePaths(request, solver.weighting, queryGraph, result.paths, result.wayPoints);
+        ResponsePath responsePath = concatenatePaths(request, solver, queryGraph, result.paths, result.wayPoints);
         ghRsp.add(responsePath);
         ghRsp.getHints().putObject("visited_nodes.sum", result.visitedNodes);
         ghRsp.getHints().putObject("visited_nodes.average", (float) result.visitedNodes / (snaps.size() - 1));
@@ -257,12 +261,12 @@ public class Router {
             throw new IllegalArgumentException("Alternative paths do not support the " + CURBSIDE + " parameter yet");
 
         ViaRouting.Result result = ViaRouting.calcPaths(request.getPoints(), queryGraph, snaps, directedEdgeFilter,
-                pathCalculator, request.getCurbsides(), curbsideStrictness, request.getHeadings(), passThrough);
+                pathCalculator, request.getCurbsides(), curbsideStrictness, request.getHeadings(), passThrough, encodingManager);
         if (result.paths.isEmpty())
             throw new RuntimeException("Empty paths for alternative route calculation not expected");
 
         // each path represents a different alternative and we do the path merging for each of them
-        PathMerger pathMerger = createPathMerger(request, solver.weighting, queryGraph);
+        PathMerger pathMerger = createPathMerger(request, solver, queryGraph);
         for (Path path : result.paths) {
             PointList waypoints = getWaypoints(snaps);
             ResponsePath responsePath = pathMerger.doWork(waypoints, Collections.singletonList(path), encodingManager, translationMap.getWithFallBack(request.getLocale()));
@@ -287,13 +291,13 @@ public class Router {
         boolean passThrough = getPassThrough(request.getHints());
         String curbsideStrictness = getCurbsideStrictness(request.getHints());
         ViaRouting.Result result = ViaRouting.calcPaths(request.getPoints(), queryGraph, snaps, directedEdgeFilter,
-                pathCalculator, request.getCurbsides(), curbsideStrictness, request.getHeadings(), passThrough);
+                pathCalculator, request.getCurbsides(), curbsideStrictness, request.getHeadings(), passThrough, encodingManager);
 
         if (request.getPoints().size() != result.paths.size() + 1)
             throw new RuntimeException("There should be exactly one more point than paths. points:" + request.getPoints().size() + ", paths:" + result.paths.size());
 
         // here each path represents one leg of the via-route and we merge them all together into one response path
-        ResponsePath responsePath = concatenatePaths(request, solver.weighting, queryGraph, result.paths, getWaypoints(snaps));
+        ResponsePath responsePath = concatenatePaths(request, solver, queryGraph, result.paths, getWaypoints(snaps));
         responsePath.addDebugInfo(result.debug);
         ghRsp.add(responsePath);
         ghRsp.getHints().putObject("visited_nodes.sum", result.visitedNodes);
@@ -301,8 +305,9 @@ public class Router {
         return ghRsp;
     }
 
-    private PathMerger createPathMerger(GHRequest request, Weighting weighting, Graph graph) {
+    private PathMerger createPathMerger(GHRequest request, Solver solver, Graph graph) {
         boolean enableInstructions = request.getHints().getBool(Parameters.Routing.INSTRUCTIONS, routerConfig.isInstructionsEnabled());
+        boolean includeRoundaboutExitInstruction = request.getHints().getBool(Parameters.Routing.ROUNDABOUT_EXITS, false);
         boolean calcPoints = request.getHints().getBool(Parameters.Routing.CALC_POINTS, routerConfig.isCalcPoints());
         double wayPointMaxDistance = request.getHints().getDouble(Parameters.Routing.WAY_POINT_MAX_DISTANCE, 0.5);
         double elevationWayPointMaxDistance = request.getHints().getDouble(ELEVATION_WAY_POINT_MAX_DISTANCE, routerConfig.getElevationWayPointMaxDistance());
@@ -310,10 +315,13 @@ public class Router {
         RamerDouglasPeucker peucker = new RamerDouglasPeucker().
                 setMaxDistance(wayPointMaxDistance).
                 setElevationMaxDistance(elevationWayPointMaxDistance);
-        PathMerger pathMerger = new PathMerger(graph, weighting).
+        PathMerger pathMerger = new PathMerger(graph, solver.weighting).
+                setInstructionsBaseMode(solver.profile.getInstructionsBaseMode()).
                 setCalcPoints(calcPoints).
                 setRamerDouglasPeucker(peucker).
                 setEnableInstructions(enableInstructions).
+                setIncludeRoundaboutExitInstruction(includeRoundaboutExitInstruction).
+                setAnnouncedViaPoints(request.getAnnouncedViaPoints()).
                 setPathDetailsBuilders(pathDetailsBuilderFactory, request.getPathDetails()).
                 setSimplifyResponse(routerConfig.isSimplifyResponse() && wayPointMaxDistance > 0);
 
@@ -322,8 +330,8 @@ public class Router {
         return pathMerger;
     }
 
-    private ResponsePath concatenatePaths(GHRequest request, Weighting weighting, QueryGraph queryGraph, List<Path> paths, PointList waypoints) {
-        PathMerger pathMerger = createPathMerger(request, weighting, queryGraph);
+    private ResponsePath concatenatePaths(GHRequest request, Solver solver, QueryGraph queryGraph, List<Path> paths, PointList waypoints) {
+        PathMerger pathMerger = createPathMerger(request, solver, queryGraph);
         return pathMerger.doWork(waypoints, paths, encodingManager, translationMap.getWithFallBack(request.getLocale()));
     }
 
