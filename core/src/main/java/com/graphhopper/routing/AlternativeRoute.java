@@ -93,9 +93,9 @@ public class AlternativeRoute extends AStarBidirection implements RoutingAlgorit
      */
     private final double maxDistance;
     /**
-     * Maximum ratio of shared edge distance between any two accepted alternatives.
-     * E.g. if set to 0.7, a candidate sharing more than 70% of its edge distance
-     * with any already-accepted alternative is rejected.
+     * Maximum ratio of exactly-shared edges (measured by their distance) between any two accepted
+     * alternatives. E.g. if set to 0.7, a candidate that shares more than 70% of the longer path's
+     * distance in common edges with any already-accepted alternative is rejected.
      * A value <= 0 or >= 1 disables this filter (default: -1, disabled).
      */
     private final double maxDistanceShareFactor;
@@ -150,7 +150,9 @@ public class AlternativeRoute extends AStarBidirection implements RoutingAlgorit
     }
 
     /**
-     * Check if a candidate path is too similar (by edge distance) to any already-accepted alternative.
+     * Check if a candidate path shares too many exact edges with any already-accepted alternative.
+     * Similarity is the summed distance of the edges the two paths have in common (matched by edge id)
+     * divided by the longer path's total distance; distance is only the unit, not spatial proximity.
      * Returns true if the candidate should be rejected.
      */
     private boolean isTooSimilarByDistance(Path candidate, List<AlternativeInfo> accepted) {
@@ -405,8 +407,8 @@ public class AlternativeRoute extends AStarBidirection implements RoutingAlgorit
                             }
                         }
 
-                        // (5) Distance-based share filtering: reject if path shares too many edges
-                        // (by distance) with any already-accepted alternative
+                        // (5) Exact-edge share filtering: reject if path shares too many of the exact
+                        // same edges (measured by their distance) with any already-accepted alternative
                         if (maxDistanceShareFactor > 0 && maxDistanceShareFactor < 1) {
                             if (isTooSimilarByDistance(path, alternatives)) {
                                 return true;  // skip this alternative, too similar
