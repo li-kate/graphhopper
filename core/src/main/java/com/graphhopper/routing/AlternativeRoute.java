@@ -20,6 +20,7 @@ package com.graphhopper.routing;
 import com.carrotsearch.hppc.IntSet;
 import com.carrotsearch.hppc.predicates.IntObjectPredicate;
 import com.graphhopper.coll.GHIntHashSet;
+import com.graphhopper.routing.ev.DecimalEncodedValue;
 import com.graphhopper.routing.util.TraversalMode;
 import com.graphhopper.routing.weighting.Weighting;
 import com.graphhopper.storage.Graph;
@@ -100,6 +101,29 @@ public class AlternativeRoute extends AStarBidirection implements RoutingAlgorit
      */
     private final double maxDistanceShareFactor;
 
+    /**
+     * Key used to stash the resolved per-edge {@link DecimalEncodedValue} into the hints PMap so
+     * AlternativeRoute can read it without changing any public factory signature. See
+     * Router.FlexSolver.getAlgoOpts where it is injected.
+     */
+    public static final String EV_FILTER_HINT = "alternative_route.ev_encoded_value";
+
+    /**
+     * Per-edge encoded value used to compute a distance-weighted route average and filter
+     * alternatives against it. Null disables the filter (the common case).
+     */
+    private final DecimalEncodedValue evFilter;
+    /**
+     * Reject an alternative if its distance-weighted average of {@link #evFilter} exceeds this.
+     * Use for "lower is better" metrics such as heat exposure (UTCI). NaN disables this bound.
+     */
+    private final double evMax;
+    /**
+     * Reject an alternative if its distance-weighted average of {@link #evFilter} is below this.
+     * Use for "higher is better" metrics such as greenery. NaN disables this bound.
+     */
+    private final double evMin;
+
     public AlternativeRoute(Graph graph, Weighting weighting, TraversalMode traversalMode, PMap hints) {
         super(graph, weighting, traversalMode);
         if (weighting.hasTurnCosts() && !traversalMode.isEdgeBased())
@@ -115,6 +139,46 @@ public class AlternativeRoute extends AStarBidirection implements RoutingAlgorit
         this.minPlateauFactor = hints.getDouble("alternative_route.min_plateau_factor", 0.1);
         this.maxDistance = hints.getDouble("alternative_route.max_distance", -1);
         this.maxDistanceShareFactor = hints.getDouble("alternative_route.max_distance_share_factor", -1);
+
+        this.evFilter = (DecimalEncodedValue) hints.getObject(EV_FILTER_HINT, null);
+        this.evMax = hints.getDouble("alternative_route.ev_max", Double.NaN);
+        this.evMin = hints.getDouble("alternative_route.ev_min", Double.NaN);
+    }
+
+    /**
+     * Distance-weighted average of the {@link #evFilter} encoded value over a path:
+     * Sum(ev_edge * metres_edge) / Sum(metres_edge). Weighting by metre length (not by number of
+     * geometry points) avoids biasing toward curvy, point-dense segments. Returns NaN for an
+     * empty/zero-length path.
+     */
+    private double routeAverageEv(Path path) {
+        double weighted = 0, dist = 0;
+        for (EdgeIteratorState edge : path.calcEdges()) {
+            double meters = edge.getDistance();
+            if (meters <= 0)
+                continue;
+            weighted += edge.get(evFilter) * meters;
+            dist += meters;
+        }
+        return dist > 0 ? weighted / dist : Double.NaN;
+    }
+
+    /**
+     * True if the path's distance-weighted average EV violates the configured bound(s):
+     * above ev_max (lower-is-better metrics, e.g. heat) or below ev_min (higher-is-better, e.g.
+     * greenery). A path whose average is NaN (no measurable length) is rejected when a filter is active.
+     */
+    private boolean failsEvThreshold(Path path) {
+        if (evFilter == null || (Double.isNaN(evMax) && Double.isNaN(evMin)))
+            return false;
+        double avg = routeAverageEv(path);
+        if (Double.isNaN(avg))
+            return true;
+        if (!Double.isNaN(evMax) && avg > evMax)
+            return true;
+        if (!Double.isNaN(evMin) && avg < evMin)
+            return true;
+        return false;
     }
 
     static List<String> getAltNames(Graph graph, SPTEntry ee) {
@@ -182,10 +246,20 @@ public class AlternativeRoute extends AStarBidirection implements RoutingAlgorit
 
     public List<AlternativeInfo> calcAlternatives(int from, int to) {
         Path bestPath = searchBest(from, to);
-        return calcAlternatives(bestPath, maxPaths,
+        List<AlternativeInfo> alternatives = calcAlternatives(bestPath, maxPaths,
                 maxWeightFactor, 7,
                 maxShareFactor, 0.8,
                 minPlateauFactor, -0.2);
+
+        // Candidate alternatives are already EV-filtered inside the SPT loop (step 6), which lets the
+        // search keep looking and still return up to maxPaths routes that satisfy the threshold.
+        // The best path, however, is seeded into the list before that loop and is exempt from the
+        // in-loop check, so drop it here if it violates the threshold. This is the only path that can
+        // reach this point in violation of the bound.
+        if (evFilter != null && !alternatives.isEmpty() && failsEvThreshold(alternatives.get(0).getPath()))
+            alternatives.remove(0);
+
+        return alternatives;
     }
 
     @Override
@@ -413,6 +487,15 @@ public class AlternativeRoute extends AStarBidirection implements RoutingAlgorit
                             if (isTooSimilarByDistance(path, alternatives)) {
                                 return true;  // skip this alternative, too similar
                             }
+                        }
+
+                        // (6) EV threshold filtering: reject if the distance-weighted average of the
+                        // configured encoded value violates ev_max (lower-is-better, e.g. heat) or
+                        // ev_min (higher-is-better, e.g. greenery). Rejecting here - rather than
+                        // trimming the final list - lets the search keep looking so we still return
+                        // up to maxPaths routes that all satisfy the threshold.
+                        if (failsEvThreshold(path)) {
+                            return true;  // skip this alternative, violates EV threshold
                         }
 
                         alternatives.add(new AlternativeInfo(sortBy, path, shareWeight, altNames));

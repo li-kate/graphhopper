@@ -39,6 +39,7 @@ import com.graphhopper.storage.index.LocationIndex;
 import com.graphhopper.storage.index.Snap;
 import com.graphhopper.util.*;
 import com.graphhopper.util.details.PathDetailsBuilderFactory;
+import com.graphhopper.util.exceptions.ConnectionNotFoundException;
 import com.graphhopper.util.exceptions.PointDistanceExceededException;
 import com.graphhopper.util.exceptions.PointNotFoundException;
 import com.graphhopper.util.exceptions.PointOutOfBoundsException;
@@ -262,8 +263,18 @@ public class Router {
 
         ViaRouting.Result result = ViaRouting.calcPaths(request.getPoints(), queryGraph, snaps, directedEdgeFilter,
                 pathCalculator, request.getCurbsides(), curbsideStrictness, request.getHeadings(), passThrough, encodingManager);
-        if (result.paths.isEmpty())
+        if (result.paths.isEmpty()) {
+            // The EV threshold filter (alternative_route.ev + ev_max/ev_min) can legitimately reject
+            // every alternative, including the best path. Surface that as "no route found" instead of
+            // treating it as an internal invariant violation.
+            if (request.getHints().has("alternative_route.ev")) {
+                ghRsp.addError(new ConnectionNotFoundException(
+                        "No alternative route satisfies the requested alternative_route.ev threshold.",
+                        new HashMap<>()));
+                return ghRsp;
+            }
             throw new RuntimeException("Empty paths for alternative route calculation not expected");
+        }
 
         // each path represents a different alternative and we do the path merging for each of them
         PathMerger pathMerger = createPathMerger(request, solver, queryGraph);
@@ -548,6 +559,19 @@ public class Router {
                     setMaxVisitedNodes(getMaxVisitedNodes(request.getHints())).
                     setTimeoutMillis(getTimeoutMillis(request.getHints())).
                     setHints(request.getHints());
+
+            // Alternative-route EV threshold filter: the request names the encoded value by key
+            // (alternative_route.ev) and a bound (ev_max for lower-is-better metrics like heat,
+            // ev_min for higher-is-better metrics like greenery). Resolve the per-edge
+            // DecimalEncodedValue here where the EncodedValueLookup is available and pass the
+            // resolved object to AlternativeRoute via the hints PMap, avoiding any factory
+            // signature change.
+            String evKey = request.getHints().getString("alternative_route.ev", "");
+            if (!evKey.isEmpty()) {
+                if (!lookup.hasEncodedValue(evKey))
+                    throw new IllegalArgumentException("Unknown encoded value for alternative_route.ev: '" + evKey + "'");
+                algoOpts.getHints().putObject(AlternativeRoute.EV_FILTER_HINT, lookup.getDecimalEncodedValue(evKey));
+            }
 
             // use A* for round trips
             if (ROUND_TRIP.equalsIgnoreCase(request.getAlgorithm())) {
