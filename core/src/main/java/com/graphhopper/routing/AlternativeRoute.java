@@ -124,6 +124,21 @@ public class AlternativeRoute extends AStarBidirection implements RoutingAlgorit
      */
     private final double evMin;
 
+    /**
+     * Hint carrying the edges of a route returned by a previous GraphHopper call (e.g. the shortest
+     * route) that candidate alternatives should be compared against. Format: a comma-separated list
+     * of edge ids, e.g. "12,45,998". The comparison uses the same metric and threshold
+     * ({@link #maxDistanceShareFactor}) as {@link #isTooSimilarByDistance}. The edge ids must come
+     * from the same graph as this query. Empty/absent disables the comparison.
+     */
+    public static final String REFERENCE_EDGES = "alternative_route.reference_edges";
+
+    /**
+     * The reference route (from a previous call) as an edge-id -> distance map plus its total
+     * distance, built once in the constructor. Null when no reference route was supplied.
+     */
+    private final EdgeSet referenceEdgeSet;
+
     public AlternativeRoute(Graph graph, Weighting weighting, TraversalMode traversalMode, PMap hints) {
         super(graph, weighting, traversalMode);
         if (weighting.hasTurnCosts() && !traversalMode.isEdgeBased())
@@ -143,6 +158,8 @@ public class AlternativeRoute extends AStarBidirection implements RoutingAlgorit
         this.evFilter = (DecimalEncodedValue) hints.getObject(EV_FILTER_HINT, null);
         this.evMax = hints.getDouble("alternative_route.ev_max", Double.NaN);
         this.evMin = hints.getDouble("alternative_route.ev_min", Double.NaN);
+
+        this.referenceEdgeSet = parseReferenceEdgeSet(graph, hints.getString(REFERENCE_EDGES, ""));
     }
 
     /**
@@ -203,44 +220,100 @@ public class AlternativeRoute extends AStarBidirection implements RoutingAlgorit
     }
 
     /**
-     * Build a map of edge ID -> distance (meters) for a path.
+     * A route reduced to the only data the exact-edge share check needs: an edge-id -> distance
+     * (meters) map and the route's total distance. This gives already-accepted alternatives (built
+     * from a {@link Path} on the fly) and the reference route from a previous call (built once from
+     * edge ids, see {@link #REFERENCE_EDGES}) the same shape, so a single comparison method handles both.
      */
-    private Map<Integer, Double> calcEdgeDistances(Path path) {
+    private static final class EdgeSet {
+        final Map<Integer, Double> edgeDistances;
+        final double total;
+
+        EdgeSet(Map<Integer, Double> edgeDistances, double total) {
+            this.edgeDistances = edgeDistances;
+            this.total = total;
+        }
+    }
+
+    /**
+     * Build an {@link EdgeSet} from a path's edges.
+     */
+    private EdgeSet toEdgeSet(Path path) {
         Map<Integer, Double> edgeDistances = new HashMap<>();
         for (EdgeIteratorState edge : path.calcEdges()) {
             edgeDistances.put(edge.getEdge(), edge.getDistance());
         }
-        return edgeDistances;
+        return new EdgeSet(edgeDistances, path.getDistance());
     }
 
     /**
-     * Check if a candidate path shares too many exact edges with any already-accepted alternative.
-     * Similarity is the summed distance of the edges the two paths have in common (matched by edge id)
-     * divided by the longer path's total distance; distance is only the unit, not spatial proximity.
-     * Returns true if the candidate should be rejected.
+     * Parse the {@link #REFERENCE_EDGES} hint (comma-separated edge ids) into an {@link EdgeSet},
+     * looking up each edge's distance from the graph. Returns null when no reference route was given.
      */
-    private boolean isTooSimilarByDistance(Path candidate, List<AlternativeInfo> accepted) {
-        Map<Integer, Double> candidateEdges = calcEdgeDistances(candidate);
-        double candidateTotal = candidate.getDistance();
-        if (candidateTotal <= 0) return false;
-
-        for (AlternativeInfo alt : accepted) {
-            Map<Integer, Double> altEdges = calcEdgeDistances(alt.getPath());
-            double altTotal = alt.getPath().getDistance();
-
-            double sharedDistance = 0;
-            for (Map.Entry<Integer, Double> entry : candidateEdges.entrySet()) {
-                if (altEdges.containsKey(entry.getKey())) {
-                    // same edge id -> same distance, so count the shared edge once
-                    sharedDistance += entry.getValue();
-                }
+    private static EdgeSet parseReferenceEdgeSet(Graph graph, String refEdgesStr) {
+        if (refEdgesStr.isEmpty())
+            return null;
+        Map<Integer, Double> edgeDistances = new HashMap<>();
+        double total = 0;
+        int edgeCount = graph.getEdges();
+        for (String token : refEdgesStr.split(",")) {
+            token = token.trim();
+            if (token.isEmpty())
+                continue;
+            int edgeId;
+            try {
+                edgeId = Integer.parseInt(token);
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("Invalid edge id in " + REFERENCE_EDGES + ": '" + token + "'");
             }
+            // Ignore ids that are not real base-graph edges for this query. Virtual edges created
+            // for the previous call's snapped points are not guaranteed to exist here, and a stale
+            // id would otherwise throw from getEdgeIteratorState.
+            if (edgeId < 0 || edgeId >= edgeCount)
+                continue;
+            if (edgeDistances.containsKey(edgeId))
+                continue;
+            double dist = graph.getEdgeIteratorState(edgeId, Integer.MIN_VALUE).getDistance();
+            edgeDistances.put(edgeId, dist);
+            total += dist;
+        }
+        return edgeDistances.isEmpty() ? null : new EdgeSet(edgeDistances, total);
+    }
 
-            double maxTotal = Math.max(candidateTotal, altTotal);
-            if (maxTotal > 0 && sharedDistance / maxTotal > maxDistanceShareFactor) {
-                return true;
+    /**
+     * Summed distance of the edges the candidate and {@code other} have in common (matched by edge
+     * id) divided by the longer route's total distance. Distance is only the unit, not spatial
+     * proximity. Returns true if that ratio exceeds {@link #maxDistanceShareFactor}, i.e. the
+     * candidate is too similar to {@code other} and should be rejected.
+     */
+    private boolean isTooSimilar(EdgeSet candidate, EdgeSet other) {
+        if (candidate.total <= 0)
+            return false;
+        double sharedDistance = 0;
+        for (Map.Entry<Integer, Double> entry : candidate.edgeDistances.entrySet()) {
+            if (other.edgeDistances.containsKey(entry.getKey())) {
+                // same edge id -> same distance, so count the shared edge once
+                sharedDistance += entry.getValue();
             }
         }
+        double maxTotal = Math.max(candidate.total, other.total);
+        return maxTotal > 0 && sharedDistance / maxTotal > maxDistanceShareFactor;
+    }
+
+    /**
+     * Check if a candidate path shares too many exact edges with any already-accepted alternative
+     * or with the reference route from a previous call (see {@link #REFERENCE_EDGES}). Both use the
+     * same metric and the same {@link #maxDistanceShareFactor} threshold. Returns true if the
+     * candidate should be rejected.
+     */
+    private boolean isTooSimilarByDistance(Path candidate, List<AlternativeInfo> accepted) {
+        EdgeSet candidateSet = toEdgeSet(candidate);
+        for (AlternativeInfo alt : accepted) {
+            if (isTooSimilar(candidateSet, toEdgeSet(alt.getPath())))
+                return true;
+        }
+        if (referenceEdgeSet != null && isTooSimilar(candidateSet, referenceEdgeSet))
+            return true;
         return false;
     }
 
@@ -251,13 +324,22 @@ public class AlternativeRoute extends AStarBidirection implements RoutingAlgorit
                 maxShareFactor, 0.8,
                 minPlateauFactor, -0.2);
 
-        // Candidate alternatives are already EV-filtered inside the SPT loop (step 6), which lets the
-        // search keep looking and still return up to maxPaths routes that satisfy the threshold.
-        // The best path, however, is seeded into the list before that loop and is exempt from the
-        // in-loop check, so drop it here if it violates the threshold. This is the only path that can
-        // reach this point in violation of the bound.
-        if (evFilter != null && !alternatives.isEmpty() && failsEvThreshold(alternatives.get(0).getPath()))
-            alternatives.remove(0);
+        // The best path is seeded into the list before the SPT loop (as bestAlt) and is therefore
+        // exempt from every in-loop filter (steps 5 and 6). Candidates found inside the loop are
+        // already filtered there, so only index 0 (the best path) can reach this point in violation
+        // of a bound. Apply the same two filters to it here so a best path that is too similar to the
+        // reference route, or that violates the EV threshold, is dropped just like the alternatives.
+        if (!alternatives.isEmpty()) {
+            Path best = alternatives.get(0).getPath();
+            boolean dropBest = false;
+            if (maxDistanceShareFactor > 0 && maxDistanceShareFactor < 1
+                    && referenceEdgeSet != null && isTooSimilar(toEdgeSet(best), referenceEdgeSet))
+                dropBest = true;
+            if (evFilter != null && failsEvThreshold(best))
+                dropBest = true;
+            if (dropBest)
+                alternatives.remove(0);
+        }
 
         return alternatives;
     }
@@ -483,9 +565,11 @@ public class AlternativeRoute extends AStarBidirection implements RoutingAlgorit
 
                         // (5) Exact-edge share filtering: reject if path shares too many of the exact
                         // same edges (measured by their distance) with any already-accepted alternative
+                        // or with the reference route from a previous call (alternative_route.reference_edges).
+                        // Both use the same maxDistanceShareFactor threshold.
                         if (maxDistanceShareFactor > 0 && maxDistanceShareFactor < 1) {
                             if (isTooSimilarByDistance(path, alternatives)) {
-                                return true;  // skip this alternative, too similar
+                                return true;  // skip this alternative, too similar to an accepted one or the reference route
                             }
                         }
 
