@@ -8,7 +8,7 @@ public class NDVI {
     public static final String NORMALIZED_KEY = "ndvi_normalized";
 
     public static DecimalEncodedValue createRaw() {
-        return new DecimalEncodedValueImpl(KEY, 14, 0, 0.0001,
+        return new DecimalEncodedValueImpl(KEY, 15, -1, 0.0001,
                 false, false, false);
     }
 
